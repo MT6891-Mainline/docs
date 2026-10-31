@@ -641,3 +641,83 @@ WiFi 的周期性扫描在挂起窗口内完成，`wakeup_source_activate()` 递
 * 中止后显示需要手动恢复（重启 gdm）
 
 **建议**：把"熄屏"作为日常省电手段（已稳定），挂起不再追求。
+
+---
+
+## 23. 最终结论（2026-10-31 晚）：挂起放弃，改用熄屏
+
+### 23.1 这一轮修好的东西（都有价值，与挂起无关）
+
+| # | 问题 | 修复 | 版本 |
+| --- | --- | --- | --- |
+| 1 | **PMIC 中断接到了 GIC** | 改接 pinctrl EINT（GPIO 222 电平高） | v166 |
+| 2 | 电源键 **release 中断**被武装成唤醒源 | 只武装按下中断 | v170 |
+| 3 | `mtk_pmic_keys_resume()` 解除未武装的 release | 同步修正 | v175 |
+| 4 | USB gadget 的 `softconnect` 状态跟踪 | 如实反映硬件 | v155 |
+| 5 | 显示 wakelock 在挂起中激活 | 挂起期间跳过 | v159 |
+| 6 | WiFi 唤醒事件上报 | `pm_suspend_target_state` 抑制 | v167 |
+| 7 | conninfra + 蓝牙唤醒锁 | 同上 | v168 |
+| 8 | 蓝牙 IRQ 武装 | 默认不武装（`bt_wakeup_enable`） | v169 |
+| 9 | WiFi 扫描请求撞进挂起窗口 | 挂起期间拒绝扫描 | v171 |
+| 10 | 9 个永久持有的唤醒锁否决挂起 | 只检查事件计数 | v173 |
+| 11 | timesync / 充电器的 hard 事件 | 挂起期间抑制 | v174 |
+
+**其中 #1 是最有价值的发现**：PMIC 中断接错导致的不止电源键——PMIC 的
+RTC 闹钟、电池、耳机检测中断**全都是死的**，只是没人注意到。
+
+### 23.2 仍然失败的原因
+
+最后一轮（v175/v176）的诊断栈：
+
+```
+pm_system_wakeup
+  pm_system_irq_wakeup
+    irq_pm_handle_wakeup
+      irq_can_handle_pm
+        handle_fasteoi_irq
+          gic_handle_irq
+```
+
+**是某个硬件 IRQ 在挂起窗口里触发**，`pm_system_irq_wakeup()` 把它记进
+`wakeup_irq[]` 并置 `pm_abort_suspend` → 中止。
+
+v176 会打印 IRQ 号和驱动名（`CHOPIN-ABORT: wakeup irq N (name)`），
+但**没有继续验证**——见 §23.4。
+
+### 23.3 挂起的真实代价（实测）
+
+| 次数 | 结果 |
+| --- | --- |
+| 10+ 轮尝试 | 3 次系统卡死、3 次花屏、每次都要重启 |
+| 每次卡死 | 屏幕处于未知状态，有图像粘滞风险 |
+
+即使修好，收益也只是相比熄屏多省 **0.3–0.5 W**。
+
+### 23.4 决定：用熄屏（已经成熟）
+
+| 项 | 方案 |
+| --- | --- |
+| **电源键** | 切换背光（`chopin-powerkey.service` → `lm36273/brightness`） |
+| 空闲熄屏 | 60 秒（GNOME idle-delay，DPMS off，已验证不花屏） |
+| GNOME 电源键动作 | `power-button-action='nothing'`（不让 gsd 去挂起） |
+| logind | `HandlePowerKey=ignore` |
+| 挂起 | ❌ 不启用；`mem_sleep` 保持 deep 但不会触发 |
+
+**用背光切换而不是 DRM 熄屏**的理由：不碰 DSI/面板状态机，零花屏风险，
+唤醒是瞬时的。真正的 DPMS 熄屏仍由 60 秒空闲触发。
+
+### 23.5 还留下的诊断代码
+
+`pm_wakeup_pending()` / `pm_system_wakeup()` / `pm_system_irq_wakeup()` /
+`wakeup_source_activate()` 里的 `CHOPIN-WAKEUP` / `CHOPIN-ABORT` 打印**保留**：
+它们只在挂起尝试时触发，正常情况下无声，将来想继续做可以直接用。
+
+### 23.6 如果将来要重做
+
+1. 刷 v176，按电源键，读 `dmesg | grep CHOPIN-ABORT` → 拿到 IRQ 号
+2. 对照 `/proc/interrupts` 找到驱动
+3. 在驱动的 `suspend` 回调里 `disable_irq_wake()`，`resume` 里恢复
+4. 重复直到没有 `CHOPIN-ABORT`
+
+预计还剩 1–3 个 IRQ（蓝牙 BTIF、PMIC EINT、触摸屏最可能）。
+但**不建议继续**：代价是反复卡死和花屏风险，收益只有 0.3–0.5 W。

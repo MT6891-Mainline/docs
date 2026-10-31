@@ -19,7 +19,7 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 | **现在能干什么、不能干什么** | [`status/STATUS.md`](status/STATUS.md) |
 | 电量计为什么读不到、PD 为什么不协商 | [`power/CHARGING.md`](power/CHARGING.md) |
 | GPU 怎么从 350 提到 810 MHz | [`gpu/GPU-PERF.md`](gpu/GPU-PERF.md) |
-| 为什么挂起永远修不好 | [`power/SUSPEND-ANALYSIS.md`](power/SUSPEND-ANALYSIS.md) |
+| 挂起为什么放弃（10+ 轮完整记录） | [`power/SUSPEND-ANALYSIS.md`](power/SUSPEND-ANALYSIS.md) |
 | 显示时钟链路 | [`display/DRM-CLOCK-GAP.md`](display/DRM-CLOCK-GAP.md) |
 | 厂商 DRM 有什么坑 | [`display/V2-DRM-AUDIT.md`](display/V2-DRM-AUDIT.md) |
 | rootfs 怎么构建、GNOME 怎么配 | [`rootfs/DEBIAN-ROOTFS.md`](rootfs/DEBIAN-ROOTFS.md) |
