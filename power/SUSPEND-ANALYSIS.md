@@ -509,3 +509,81 @@ rtcwake -m mem -s N             # ⛔ 禁止
 ```
 
 日常的 `systemctl suspend` / GNOME 关机菜单的"挂起"会被抑制锁拒绝，是安全的。
+
+---
+
+## 21. 2026-10-31 再攻挂起：找到"花屏"的真凶
+
+### 21.1 mtu3 那一关确实通了
+
+v155 修好 `softconnect` 状态跟踪后，挂起完整走过了 USB 阶段：
+
+```
+PM: suspend entry (deep) → … → PM: suspend exit
+（没有 "ip sleep failed"，没有 returns -16）
+```
+
+**mtu 不再是阻塞点。**
+
+### 21.2 wakelock 也不再阻塞（v159）
+
+`/sys/kernel/debug/wakeup_sources` 显示 `disp_crtc0_wakelock` 和 `cmdq_pm_lock`
+长期 active，而 `wakeup_source_activate()` **无条件递增全局计数器**：
+
+```c
+/* drivers/base/power/wakeup.c */
+cec = atomic_inc_return(&combined_event_count);
+```
+
+挂起期间显示自己被提交/关闭 → wakelock 重新激活 → 计数器变化 →
+`Wakeup pending. Abort CPU freeze`。
+
+v159 在挂起期间跳过 wakelock 操作（`mtk_drm_set_suspend_in_progress()`）。
+
+### 21.3 花屏真凶：**resume 里多做了一次开关**
+
+关键观察：**挂起回来时画面先好了一下，然后才花**。
+
+日志顺序解释了原因：
+
+```
+56.24  [DDP Error]mtk_dsi_exit_ulps fail
+56.24  Skipping prepare of already prepared panel
+56.24  Skipping enable of already enabled panel
+56.24  [DISP][E][IRQ] DDP_COMPONENT_OVL0: frame underflow!
+```
+
+`drm_atomic_helper_resume()` **已经把画面恢复了**（用户看到的"一瞬间好"）。
+紧接着 v129 加的那句无条件 `mtk_disp_recover_all()` 又做了一遍 关→开：
+
+* 多一次 `mtk_dsi_exit_ulps()` —— 挂起后这次会超时失败
+* 面板状态机认为"已 enable"→ 恢复调用变空操作
+* 结果：DSI 链路停在 ULPS，帧下溢 → **花屏**
+
+**是恢复逻辑自己把好画面搞坏了。**
+
+### 21.4 修复
+
+| 版本 | 改动 |
+| --- | --- |
+| v160 | `mtk_dsi_exit_ulps()` 失败时重置 PHY 并重试（最多 3 次） |
+| **v161** | resume **不再**强制重初始化；交给 underrun 重试路径按需处理 |
+
+```c
+/* mtk_drm_sys_resume() */
+drm_atomic_helper_resume(drm, private->suspend_state);
+/* 不再调用 mtk_disp_recover_all()：它自己就会把画面弄坏 */
+```
+
+真正被拆掉面板的情况，由 v143 的 underrun 重试兜底（等 CRTC active 后
+重新初始化）。
+
+### 21.5 仍未解决
+
+```
+[54.22] [DISP][E] mtk_crtc_cmdq_timeout_cb cmdq timeout, crtc id:0
+[54.23] [CMDQ]<0>(0) suspend:0x1
+```
+
+挂起时显示还在提交 CMDQ 命令，而 CMDQ 已经开始挂起 → 命令等不到完成 →
+超时。这是设备挂起顺序问题，**尚未修复**，可能是后续卡顿/异常的另一来源。
