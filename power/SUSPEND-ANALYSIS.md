@@ -587,3 +587,57 @@ drm_atomic_helper_resume(drm, private->suspend_state);
 
 挂起时显示还在提交 CMDQ 命令，而 CMDQ 已经开始挂起 → 命令等不到完成 →
 超时。这是设备挂起顺序问题，**尚未修复**，可能是后续卡顿/异常的另一来源。
+
+---
+
+## 22. 2026-10-31 v162 实测：**花屏修好了**，但挂起仍被 WiFi 打断
+
+### 22.1 显示侧的证据
+
+挂起尝试后（中止），计数器：
+
+```
+ulps_fail = 0      ← 不再出现 "mtk_dsi_exit_ulps fail"
+skip_en   = 0      ← 不再出现 "Skipping enable of already enabled panel"
+underrun  = 2      ← 熄屏瞬间的正常 underrun
+```
+
+**之前导致花屏的两个签名都消失了。** 修复合集：
+
+| 版本 | 改动 |
+| --- | --- |
+| v160 | `mtk_dsi_exit_ulps()` 超时后重置 PHY 重试 |
+| v161 | resume 不再无条件做完整 关→开 |
+| **v162** | 跟踪 ULPS 状态；PHY 断电后不再尝试退出 ULPS |
+
+其中 v162 是关键：`mtk_dsi_disable()` 进 ULPS 后立刻 `phy_power_off()`，
+ULPS 状态随 PHY 断电已经不存在，再去"退出"必然失败。
+
+### 22.2 但挂起仍中止：WiFi 扫描
+
+```
+[38.16] Skipping disable of already disabled panel
+[39.20] Wakeup pending. Abort CPU freeze
+[39.20] CHOPIN-SCN: kalScanDone bss=1 status=0x0 aborted=0 list=45   ← 同一毫秒
+```
+
+WiFi 的周期性扫描在挂起窗口内完成，`wakeup_source_activate()` 递增
+`combined_event_count` → 中止。
+
+**要稳定挂起必须处理这个**：挂起前停止 WiFi 扫描，或让 WiFi 驱动在系统挂起
+窗口内不产生唤醒事件。
+
+### 22.3 中止后显示停在关闭状态
+
+中止后 `dpms=Off`，`/sys/class/drm/card1-DSI-1/dpms` 又被 DRM master 占用
+（`Permission denied`），只能靠重启 gdm（完整 modeset）恢复。
+
+这是一个独立的小问题：中止路径没有把显示状态复位。
+
+### 22.4 当前结论
+
+* **花屏问题已解决**（三次针对性修复后计数器全清）
+* 挂起本身仍不可用：WiFi 扫描会打断它
+* 中止后显示需要手动恢复（重启 gdm）
+
+**建议**：把"熄屏"作为日常省电手段（已稳定），挂起不再追求。
