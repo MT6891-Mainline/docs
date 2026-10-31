@@ -721,3 +721,50 @@ v176 会打印 IRQ 号和驱动名（`CHOPIN-ABORT: wakeup irq N (name)`），
 
 预计还剩 1–3 个 IRQ（蓝牙 BTIF、PMIC EINT、触摸屏最可能）。
 但**不建议继续**：代价是反复卡死和花屏风险，收益只有 0.3–0.5 W。
+
+---
+
+## 24. 后续事故：不要把 logind 的崩溃当成挂起改坏了
+
+2026-10-31 晚出现"系统不稳定、进不去桌面"，日志：
+
+```
+systemd-logind[364]: Failed to abandon session scope, ignoring:
+                     Transport endpoint is not connected
+Session 9 logged out
+...
+gdm3: GdmLocalDisplayFactory: Failed to issue method call:
+      GDBus.Error:org.freedesktop.DBus.Error.TimedOut:
+      Failed to activate service 'org.freedesktop.login1'
+gdm-wayland-session: Unable to register display with display manager
+gdm-x-session: (EE) Cannot run in framebuffer mode   ← 回退到 X 后必然失败
+```
+
+### 原因
+
+**在有活动用户会话时执行 `systemctl restart systemd-logind`**。logind 重启后
+无法接管已有会话的 scope（`Transport endpoint is not connected`），它的 D-Bus
+接口从此超时；gdm 拿不到 seat 就创建不了 display，于是：
+
+```
+gdm → 没有 seat → 回退到 X 会话 → X 没有驱动 → 失败 → 循环
+```
+
+而 X 的报错（`Cannot run in framebuffer mode`）很有误导性，它只是 gdm 回退后的
+二次失败，**真正的根因是 logind**。
+
+### 修复
+
+```sh
+systemctl restart systemd-logind    # 这次没有活动会话，安全
+systemctl restart gdm
+# 之后 gnome-shell 立刻回来（shell=2，179 MB）
+```
+
+**规则：改 logind 配置（`HandlePowerKey` 等）后不要 `restart` logind，
+它会在下次启动时自动生效；必须重启时要先退出所有会话。**
+
+### 附属修复
+
+`systemd-localed.service` 一直是 failed，因为系统 locale 没设置。写入
+`/etc/locale.conf`（`LANG=zh_CN.UTF-8`）后正常，`systemctl --failed` 为 0。
