@@ -56,6 +56,11 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 ### `sensors/`
 SCP RV33 传感器链、加速度计、自动旋转。`REVIEW-ACCEL-*.md` 是逐轮审查记录。
 
+### `usb/`
+| 文档 | 内容 |
+| --- | --- |
+| `OTG.md` | USB 主机/OTG 调查：供电链路已通，端口使能失败（未完成） |
+
 ### `connectivity/` `audio/` `rootfs/` `build/`
 WiFi/BT、音频、Debian rootfs 与 GNOME、7.3 内核迁移。
 
