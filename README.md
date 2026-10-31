@@ -5,6 +5,7 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 
 * 内核源码：`git/chopin-linux-7.3`
 * 固件/服务/配置：`git/chopin-support`
+* **启动 initramfs（PID 1）**：`git/chopin-initramfs`
 * 文档：本仓库
 
 ---
@@ -20,6 +21,7 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 | 显示时钟链路 | [`display/DRM-CLOCK-GAP.md`](display/DRM-CLOCK-GAP.md) |
 | 厂商 DRM 有什么坑 | [`display/V2-DRM-AUDIT.md`](display/V2-DRM-AUDIT.md) |
 | rootfs 怎么构建、GNOME 怎么配 | [`rootfs/DEBIAN-ROOTFS.md`](rootfs/DEBIAN-ROOTFS.md) |
+| 开机那一刻发生了什么 | `git/chopin-initramfs/README.md` |
 
 ## 目录
 
