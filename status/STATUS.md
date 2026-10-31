@@ -20,8 +20,9 @@
 | **电量显示** | ✅ | BQ27Z561 真库仑计（±1%） |
 | **充电** | ✅ | **PD 12V / 3.75A，约 2%/分钟** |
 | 熄屏（空闲 60s） | ✅ | 唤醒不花屏 |
+| **电源键熄屏** | ✅ | 按一下切背光（`chopin-powerkey`），v166 修好 PMIC 中断后可用 |
 | GPU 最高频率 | ✅ | 810 MHz（350→810，**+77%**） |
-| 挂起 | ❌ | 见 §4，**永久放弃** |
+| 挂起 | ❌ | 见 §4，**永久放弃**（10+ 轮修复后仍有硬件 IRQ 中止） |
 
 ## 2. 性能实测
 
@@ -54,6 +55,7 @@
 | `/etc/chopin-gpu-freq` | GPU 频率（当前 `810000000`） |
 | `/etc/chopin-charge-limit` | 输入限流覆盖（可选） |
 | `/etc/chopin-charge-current` | 充电电流覆盖（可选，调低更凉） |
+| swap (`/swapfile`) | 4 GB，防 gnome-shell 泄漏触发 OOM |
 | `chopin-gpu-freq.service` | 开机应用 GPU 频率 |
 | `chopin-charge-tune.service` | 开机 + 插拔时应用充电限流 |
 | `chopin-no-suspend.desktop` | 会话内挂起抑制锁 |
@@ -61,18 +63,17 @@
 
 ## 4. 已知限制
 
-### 挂起：不可能
+### 挂起：放弃（2026-10-31 最终结论）
 
-三道坎，任何一道都足以阻止：
+10+ 轮修复分别解决了：mtu3 状态跟踪、显示 wakelock、WiFi 唤醒事件、conninfra
+与蓝牙唤醒锁、蓝牙 IRQ 武装、**PMIC 中断接错**（电源键原本完全无事件）、
+电源键 release 唤醒、WiFi 扫描撞窗、永久持有唤醒锁、timesync/充电器 hard 事件。
 
-1. `mtu3` 的 IP sleep 检测依赖没更新的 `softconnect`（**已修**）
-2. CMDQ wakelock 在设备挂起阶段被激活 → `Wakeup pending. Abort CPU freeze`
-3. 修 2 需要在 DRM 挂起后强制 relax wakelock，可能截断进行中的 CMDQ 事务 → 卡死
+**代价**：过程中 3 次卡死、3 次花屏；收益只有相比熄屏多的 0.3–0.5 W。
 
-实测代价：5 次尝试中 3 次系统卡死、2 次花屏。**熄屏已能满足省电需求**
-（面板+显示管线 0.5–1.5 W），挂起再多省 0.3–0.5 W，不值得。
+**决定**：用熄屏。细节与"如何继续"见 `chopin-docs/power/SUSPEND-ANALYSIS.md` §23。
 
-⛔ **禁止**：`echo mem > /sys/power/state`、`rtcwake -m mem -s N`
+⛔ **禁止**：`echo mem > /sys/power/state`、`rtcwake -m mem -s N`、`systemctl suspend`
 
 ### 其他
 
