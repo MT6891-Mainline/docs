@@ -444,6 +444,45 @@ mt6360 是「**驱动已主线化、DTS 混用**」的典型：
 `interrupt-parent`/`interrupts` 从厂商 2-cell 改成主线 1-cell。这需要对照
 `drivers/mfd/mt6360-core.h` 里的 IRQ 编号（`MT6360_xxx` 枚举）。
 
+
+## 中断引用转换：实际只需 1 处（2026-11-07 修正）
+
+之前统计的「40 处引用」是把 phandle 值 `0x03` 出现次数都算上了。实际用
+`interrupt-parent = <0x03>` 的节点只有 **4 个**：
+
+| 节点 | interrupts | 处理 |
+| --- | --- | --- |
+| `adc`（厂商） | `<0x29 0x00 0x2b 0x00 0x2c 0x00>` | 随厂商节点删除 |
+| `mt6360_pmic_dts`（厂商） | 12 组 | 随厂商节点删除 |
+| `mt6360_ldo_dts`（厂商） | 8 组 | 随厂商节点删除 |
+| **`type_c_port0`**（板级 Type-C） | `<0x40 0x00>` | **需要转换** |
+
+所以真正的转换只有 **1 个节点**：
+
+```dts
+/* 现在（厂商 2-cell） */
+type_c_port0 {
+    interrupt-parent = <&mt6360_pmu>;      /* 厂商 PMU */
+    interrupts = <0x40 0x00>;              /* IRQ 64 + 类型 */
+};
+
+/* 目标（主线 1-cell） */
+type_c_port0 {
+    interrupt-parent = <&mt6360>;          /* 主线 MFD */
+    interrupts = <MT6360_IRQ_xxx>;         /* 主线 regmap_irq 编号 */
+};
+```
+
+需要确认线上 mt6360 的 regmap_irq 编号（`drivers/mfd/mt6360-core.c` 的
+`regmap_irq` 表 / `mt6360-irq.h`），然后一对一替换。
+
+### 清理顺序
+
+1. 转换 `type_c_port0` 的中断引用
+2. 删除 `mt6360_pmu_dts` / `mt6360_pmic_dts` / `mt6360_ldo_dts`（约 100 行）
+3. 删除板级里的厂商 `subpmic@34`（vendor 绑定，约 60 行）
+4. 编译 → 刷 boot → 验证：充电、电池、Type-C、触摸、显示
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
