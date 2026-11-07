@@ -180,6 +180,48 @@ dsi0:  dsi@14010000   { ... };
 而 `mt6893.dtsi` 里已经有主线的 `clk-mt6893-mm`。两者在现有工作 DTB 里
 **共存**（显示正常工作），迁移时保持这个状态即可，不要删除任一。
 
+
+## 显示 DTS 接入构建时的阻碍（2026-11-07 实测）
+
+把 `chopin-display-soc.dtsi`（84 节点，dsi 加了 `dsi0:` label）接入构建，
+替换原来的 `mt6893-xiaomi-chopin-display.dtsi`，编译失败：
+
+```
+Error: mt6893-xiaomi-chopin-camera.dtsi:10.3-23
+       Properties must precede subnodes
+```
+
+原因还是**切片问题**：原 `-display.dtsi` 的结尾是一个未闭合的
+`mfb@15810000 {`，由后面 `-camera.dtsi` 开头接上（`mfb@15812000` 的属性
+和闭合）。把 display 换成自包含的新文件后，camera 的切片失去了前半段，
+节点结构就坏了。
+
+**结论：显示节点不能单独替换，必须和 camera 切片一起处理**——而 camera
+又依赖后面的 multimedia 切片……这就是任意切片的连锁依赖。
+
+### 唯一干净的解法
+
+用已经验证过能编译的**剪枝单文件 DTS**（`work/chopin-pruned.dts`，
+8,740 行 / 965 节点）**整体替换** 30 个切片：
+
+1. 把 `mt6893-xiaomi-chopin.dts` 改成包含这一个文件（或直接用它）
+2. `mt6893.dtsi` 保持现状（它的节点已经在剪枝文件里合并过，注意去重）
+3. 编译 → 对比 DTB → 刷 boot 验证
+
+这样：
+- 切片依赖问题一次性消失
+- 死节点已经剪掉（12,096 → 8,740 行）
+- 后续任何外设迁移都在**自包含**的文件里做，不再有跨文件节点
+
+风险：单文件里混着厂商和主线节点，phandle 是数字形式。但**能编译、
+能启动**是已验证的（剪枝版 dtc 通过），比继续在切片上打补丁安全。
+
+### 当前状态
+
+- 显示 DTS 拆分产物保留：`work/chopin-display-soc.dtsi`、`work/chopin-panel.dtsi`
+- 构建已回退到原切片文件，DTB 282,313 字节（与工作版本一致）
+- `mt6893-display.dtsi` 已从源码树移除
+
 ## 参考
 
 - `port/mt6895-linux/arch/arm64/boot/dts/mediatek/mt6895.dtsi`（同代 SoC 的
