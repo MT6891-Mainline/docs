@@ -222,6 +222,64 @@ Error: mt6893-xiaomi-chopin-camera.dtsi:10.3-23
 - 构建已回退到原切片文件，DTB 282,313 字节（与工作版本一致）
 - `mt6893-display.dtsi` 已从源码树移除
 
+
+## 重要进展：主线 mtk-drm 已成功接管显示（2026-11-08）
+
+v190（剪枝单文件 DTS）的启动日志证明**主线 DRM 已经跑起来了**：
+
+```
+mediatek-drm.7.auto: bound 14000000.disp_ovl  (ops mtk_disp_ovl_component_ops)
+mediatek-drm.7.auto: bound 14001000.disp_ovl / 14003000.disp_rdma
+                     / 14006000.disp_wdma / 14007000.disp_color
+                     / 14008000.disp_ccorr / 14009000.disp_aal
+                     / 1400a000.disp_gamma / 1400b000.disp_dither
+                     / 1400d000.disp_postmask / 1400e000.dsi
+                     / 14124000.disp_dsc_wrap
+[l16_36_02_0b_dsc_vdo] 1400e000.dsi.0: probed
+mediatek-drm.7.auto: [drm] fb0: mediatekdrmfb frame buffer device
+```
+
+即：**DDP 主路径全组件绑定 + DSI + DSC + 面板 probe + fbdev 创建**，显示走
+的是主线 `mtk-drm` 而不是厂商 `mediatek_v2`。
+
+### 但 v190 剪枝过头，WiFi/BT 挂了
+
+日志里的失败链：
+
+```
+consys_low_power_setting_mt6893: current_status=9 bt_only = 1
+wlanSetChipEcoInfo -> wlanAccessRegisterStatus -> glResetTrigger
+[COREDUMP] reason=[RST_ACCESS_REG_FAIL]
+wlanProbe: probe failed, reason:3
+```
+
+`RST_ACCESS_REG_FAIL` = WiFi 固件寄存器读不到。剪枝删掉的 313 个"死节点"里
+包含 `sleep@10006000`（SPM）、`srclken@10006500`（26M 时钟请求）、
+`device_mpu_*`/`devapc_*`（总线保护）、`infraao_scp_*` 等，它们的驱动在
+`vendor-v2-base` 之外，被误判为无驱动。
+
+### v191：不剪枝的单文件 DTS
+
+改为把**完整 DTB 反编译结果**直接作为单文件 DTS：
+
+```
+mt6893-xiaomi-chopin.dts   10,772 行，0 个 #include
+生成 DTB                   282,313 字节（与原 30 切片版本完全一致）
+```
+
+这样既达成"单文件、无 include"，又保证 DTB 等价——WiFi/BT/传感器保持工作。
+死节点剪枝可以作为后续**逐步验证**的独立工作。
+
+启动镜像：`out-scp-v191-single/boot-stockdt.img`（md5 `b82c433d7c13116eec9eadae9d64e7d8`）。
+
+### 日志里另外两个真实 bug
+
+1. `refcount_t: addition on 0; use-after-free` 在
+   `drm_panel_add ← lcm_probe`——厂商面板驱动对 refcount 为 0 的 panel 调了
+   `drm_panel_get`。主线 DRM 接管后这个 bug 会暴露，面板驱动需要修。
+2. `mediatek-drm.7.auto: no display OPP table, mmdvfs voting disabled` ——
+   显示 OPP 表缺失（厂商的 `mmdvfs_pmqos`），影响 mmdvfs 投票，暂不影响显示。
+
 ## 参考
 
 - `port/mt6895-linux/arch/arm64/boot/dts/mediatek/mt6895.dtsi`（同代 SoC 的
