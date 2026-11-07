@@ -133,6 +133,35 @@ DTB 里 mediatek compatible：618 个
 4. 被引用的 → 保留节点但可简化
 5. 编译 + 刷 boot 验证
 
+
+## 剪枝试验结果（2026-11-07）
+
+用「死节点 + 引用图」自动剪枝（脚本 `work/prune-dts.py`）：
+
+```
+原始（合并后 DTB 反编译）  12,096 行
+剪枝后                      8,740 行   （删除 313 个死节点）
+DTB                        276K → 222K
+dtc 编译                    通过（只剩 reg/unit_address 警告）
+```
+
+产物：
+
+- `work/chopin-pruned.dts` —— 剪枝后的完整 DTS（独立可编译）
+- `work/chopin-pruned.dtb` —— 编译验证
+- `work/prune-dts.py` —— 剪枝脚本（保留被活节点引用的死节点及其祖先）
+- `work/board.dts` —— 原始 DTB 反编译（12,096 行的来源）
+
+**注意**：这是**反编译产物**（数字 phandle、无 label），还不是目标形态。
+它的价值是验证了「死节点可以安全删除」这一点，并给出了可用的中间基线。
+
+### 下一步
+
+1. 用 `__symbols__` 把数字 phandle 转成 label（脚本已有基础：`work/clean-dts.py`）
+2. 按 SoC / 板级分类节点（参考 mt6895 的节点归属）
+3. 生成 `mt6893.dtsi`（SoC）+ `mt6893-xiaomi-chopin.dts`（板级）两个文件
+4. 编译 → 刷 boot 验证
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
