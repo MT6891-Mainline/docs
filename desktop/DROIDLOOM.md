@@ -153,3 +153,14 @@ droidloomctl gpu             # 应显示 Mali GPU ... through droidloom-gpu-serv
    lavapipe 回退）。
 3. **mesa**：PanVK 缺 v9（Bifrost G57/G77）支持。
 4. **内核**：panfrost 缺 `DRIVER_SYNCOBJ_TIMELINE`（一行修复，mainline 可接受）。
+
+## 代码与产物在哪
+
+| 内容 | 位置 |
+| --- | --- |
+| Droidloom 补丁（分支） | `/home/kily/project/mt6893/droidloom`，分支 `droidloom-mali-support-2`，`f00e863`（7 文件 +117/−42） |
+| 补丁文件 | `work/0001-gpu-drive-an-ARM-Mali-through-panfrost-forwarding.patch` |
+| 内核补丁 | `git/chopin-linux-7.3`，`fc40a6264 drm/panfrost: advertise DRIVER_SYNCOBJ_TIMELINE` |
+| 内核配置 | `git/chopin-support`，`5fd8c57 kernel: build container, network and image support in` |
+| 交叉编译的 PanVK | `work/mesa-panvk-out/`（编出来了，但 G77 不被支持） |
+| 设备上的 Droidloom 二进制 | `/usr/bin/droidloom*`（补丁版，已装） |
