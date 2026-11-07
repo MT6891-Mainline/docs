@@ -55,8 +55,46 @@ mt6893-xiaomi-chopin.dts  ~1449 行  板级：引脚、器件、面板、传感�
 8. `-i2c-spi.dtsi`（拆分）
 9. `-ovl-*`、`-board-devices.dtsi`、`-boot.dtsi`（合并进板级 dts）
 
+
+## 实际情况（2026-11-07 盘点后修正）
+
+把 30 个切片按 include 顺序合并后是 **12,096 行、约 700 个根节点**，而且：
+
+- 切片**不是自包含的**：例如 `-camera.dtsi` 以未闭合的 `mfb@15812000 {` 结尾，
+  内容延续到 `-multimedia.dtsi`。它们是反编译厂商 DTS 的任意切片。
+- 节点用**数字 phandle**（`phandle = <0xad>`、`clocks = <0xad 0x02>`），
+  不是主线风格的 label。
+- 大量厂商 binding（`mediatek,mfb`、`mediatek,venc_gcon`、`mediatek,smi_larb7`…），
+  主线没有对应驱动。
+
+**结论：机械搬移不可行，必须按外设逐个重写**（参考 mt6895 的主线节点，
+但用 MT6893 的地址/中断/时钟）。这是一个**多周**工程，不是一次整理。
+
+## 可行的分阶段路线
+
+优先级按「主线已有驱动 + 收益大」排序：
+
+| 阶段 | 外设 | 理由 |
+| --- | --- | --- |
+| 1 | **mmc / ufs（存储）** | 主线 mtk-sd/ufs 驱动成熟，节点数少、地址独立 |
+| 2 | **i2c / spi 控制器** | 主线 i2c-mt65xx/spi-mt65xx，板级器件留在 dts |
+| 3 | **pinctrl** | 主线 pinctrl-mt6893，pin 定义搬板级 |
+| 4 | **PMIC (mt6359) + regulators** | 主线 mt6397/mt6359 驱动 |
+| 5 | **display（mmsys/dsi）** | 主线 mtk-drm，节点复杂 |
+| 6 | **GPU（mali/panfrost）** | 主线 panfrost，已有工作 |
+| 7 | **audio / AFE** | 主线 mt8192-afe 已验证可用 |
+| 8 | **camera / vcodec / mfb 等** | 厂商 IP，需驱动移植 |
+
+每阶段：重写节点（label 化）→ 编译 → 刷 boot 验证 → 提交。
+
+## 立即可做的第一小步
+
+把合并后的完整 DTS 保存为参考基线（`work/chopin-full.dtsi`，12,096 行），
+下次从 **mmc 节点**开始重写。
+
 ## 当前状态（2026-11-07）
 
-- 计划完成，尚未开始迁移
+- 计划完成；已确认切片问题，路线改为「按外设重写」
+- 合并基线：`work/chopin-full.dtsi`（12,096 行，717 节点）
 - 工作基线：`out-scp-v187-rootfs`（可用）
 - 相关记录：`media/VDEC-PORT.md`（VDEC 依赖 SCP，与 DTS 无关）
