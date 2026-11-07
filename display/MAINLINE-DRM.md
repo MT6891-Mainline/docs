@@ -73,6 +73,54 @@ panel-novatek-nt36536.c
    自动旋转（需要 DRM 的旋转属性）
 5. 回滚路径：随时可以刷回 v187（厂商 DRM）
 
+
+## DTS 迁移的实际障碍（2026-11-07）
+
+对照厂商 DTS 与主线 mtk-drm 的期望，发现**地址模型不一致**：
+
+### 厂商 DTS（反编译）
+
+```
+dispsys {  compatible = "mediatek,dispsys";  /* 没有 reg！只是时钟/复位提供者 */ };
+disp_ovl@14000000 { reg = <0x00 0x14000000 0x00 0x1000>; };   ← OVL0 在 0x14000000
+disp_ovl@14001000 { ... };  disp_ovl@14002000 { ... };
+dsi@1400e000 { reg = <0x00 0x1400e000 0x00 0x1000>; };        ← DSI 在 0x1400e000
+```
+
+### 主线期望（参照 mt8192）
+
+```
+mmsys: syscon@14000000 { reg = <0 0x14000000 0 0x1000>; };     ← MMSYS 在 0x14000000
+ovl0:  ovl@14005000   { ... };
+dsi0:  dsi@14010000   { ... };
+```
+
+**冲突**：厂商把 **OVL0 放在 0x14000000**，而主线把 **MMSYS 放在
+0x14000000**。同一地址不能既是 MMSYS 又是 OVL0。
+
+可能的原因：
+1. 厂商 BSP 的 MMSYS 基址其实不是 0x14000000（`dispsys` 节点没写 reg，
+   地址硬编码在厂商驱动里）
+2. 或者 MT6893 的 DDP 布局确实和 MT8192 不同（OVL0 从 mmsys 基址开始）
+
+### 需要确认的信息
+
+- 厂商内核里 `dispsys` 的基址（`mtk_disp_*` / `mtk_drm_ddp` 的
+  `DISP_REG_*` 宏定义）
+- 主线 `mt6893_mmsys_driver_data` 对应的 DTS 节点写法（`mt8192.dtsi` 是
+  同代参考，但地址未必相同）
+- MT6893 的 DDP 组件地址表（`DISP_OVL0`/`DISP_RDMA0`/… 的偏移）
+
+**在拿到准确的寄存器基址前，DTS 节点不能凭猜测写**——写错地址轻则 probe
+失败，重则访问到别的硬件模块。
+
+### 下一步
+
+1. 从厂商内核源码找 `dispsys` 的基址定义（`mt6893` 的 `dispsys` 节点是
+   时钟提供者，基址在驱动里）
+2. 对照 MTK BSP 的 `mt6893/mt6885` 的 `disp_dts_gpio` / `DDP` 地址表
+3. 确认后再写 dtsi 节点
+
 ## 参考
 
 - `port/mt6895-linux/arch/arm64/boot/dts/mediatek/mt6895.dtsi`（同代 SoC 的
