@@ -327,6 +327,79 @@ DTS 的完整「mt6895 式重写」被**厂商驱动缺失**卡住，不是卡�
 这个结论也解释了为什么之前的 label 自动转换会失败：**大部分节点注定要保留
 厂商风格**，强行统一 label 没有意义。
 
+
+## mt6360 主线化重写（2026-11-07）
+
+mt6360 是 i2c 器件里**唯一有完整主线驱动**的（MFD + regulator/charger/adc/led/tcpc）。
+
+### 新节点已写好并编译通过
+
+`work/chopin-mt6360-test.dtsi`：
+
+```dts
+&i2c5 {
+	mt6360: mt6360@34 {
+		compatible = "mediatek,mt6360";
+		reg = <0x34>;
+		wakeup-source;
+		interrupts-extended = <&pio 24 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-names = "IRQB";
+		interrupt-controller;
+		#interrupt-cells = <1>;
+
+		regulators {
+			BUCK1: buck1 { regulator-name = "VMDLA"; ... always-on; };
+			BUCK2: buck2 { regulator-name = "VDRAM1"; ... always-on; };
+			LDO1: ldo1  { regulator-name = "VFP";  ... always-on; };
+			LDO2: ldo2  { regulator-name = "vtp";  ... always-on; };
+			LDO3: ldo3  { regulator-name = "VMC";  ... };
+			LDO5: ldo5  { regulator-name = "VMCH"; ... };
+			LDO6: ldo6  { regulator-name = "VMDDR"; ... };
+			LDO7: ldo7  { regulator-name = "VDRAM2"; ... always-on; };
+		};
+	};
+};
+```
+
+用 `cpp + dtc` 对着 `mt6893.dtsi` 编译：**通过**（DTB 23K，只有 dtsi 自带的
+mailbox 单元地址警告）。
+
+### 参数来源（全部来自厂商 DTS）
+
+| 稳压器 | 名称 | 范围（V） | always-on |
+| --- | --- | --- | --- |
+| BUCK1 | VMDLA | 0.3–1.3 | ✓ |
+| BUCK2 | VDRAM1 | 0.3–1.3 | ✓ |
+| LDO1 | VFP | 1.2–3.6 | ✓ |
+| LDO2 | vtp | 1.2–3.6 | ✓ |
+| LDO3 | VMC | 1.2–3.6 | |
+| LDO5 | VMCH | 2.7–3.6 | |
+| LDO6 | VMDDR | 0.5–2.1 | |
+| LDO7 | VDRAM2 | 0.5–2.1 | ✓ |
+
+### 消费者引用（只需改 3 处）
+
+```
+vfp-supply     = <&LDO1>
+vtouch-supply  = <&LDO2>
+vmmc-supply    = <&LDO5>
+```
+
+（厂商 phandle：LDO1=0x1e5、LDO2=0xf1、LDO5=0x51）
+
+### 集成步骤（下次）
+
+1. 从板级切片里删掉 `mt6360_pmu_dts` / `mt6360_pmic_dts` / `mt6360_ldo_dts`
+2. 引入 `chopin-mt6360-test.dtsi`（改名去掉 test）
+3. 三处消费者改为 `&LDO1/2/5`
+4. 编译 → 刷 boot → 确认：
+   - `regulator_summary` 里 VMDLA/VDRAM1/VFP/vtp/VMC/VMCH/VMDDR/VDRAM2
+   - 触摸（vtouch）、eMMC（vmmc）、显示屏（VFP）正常
+   - 充电、ADC 通道仍可用
+
+风险：charger/led/adc 子节点还没写（主线驱动需要 `mediatek,mt6360-chg` 等），
+充电可能暂时失效——需要一并补上，或者分两步（先稳压器，验证电源，再补充电）。
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
