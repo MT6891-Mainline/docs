@@ -162,6 +162,44 @@ dtc 编译                    通过（只剩 reg/unit_address 警告）
 3. 生成 `mt6893.dtsi`（SoC）+ `mt6893-xiaomi-chopin.dts`（板级）两个文件
 4. 编译 → 刷 boot 验证
 
+
+## 运行时设备树印证（2026-11-07）
+
+从设备（10.223.197.115）直接读取**运行中的 DTB**：
+
+```sh
+cp /sys/firmware/fdt /tmp/live.dtb      # 282,313 字节
+dtc -I dtb -O dts /tmp/live.dtb -o live.dts
+```
+
+### 对比结果
+
+运行中 DTB 与构建产物 **只差 4 行**：
+
+| 差异 | 说明 |
+| --- | --- |
+| `linux,initrd-end` | bootloader 补的 initrd 地址（正常） |
+| `core_0 = "disable"` vs `"enable"` | 构建目录曾是 v189 残留；已重新 `make dtbs` 同步 |
+
+### status 不能作为"能用"的依据
+
+live DTB 里带 status 的节点 118 个：83 个 okay/ok、34 个 disabled。
+但大量厂商节点（`msdc@11230000`、`adsp_*`、`mcu*`）status 是 okay，
+驱动却根本没编进内核——**status 只反映 DTS 的意愿，不反映绑定**。
+
+### 真正的依据：已绑定驱动的设备
+
+```
+/sys/bus/platform/drivers/*/  下能找到 driver 链接的设备 = 92 个
+```
+
+示例：`clk-mt6893-*`、`pinctrl-mt6893`、`mtk-sd`(mmc0)、`mtk-ufs`、`mtk-mbox`、
+`mtk-pmic-wrap`、`pwm-mtk-disp`、`mediatek-drm`、`panfrost`、`mtk-iommu` 等。
+
+**分类优先级**：驱动绑定（92）> 树里有驱动（106）> status okay（83，不可靠）。
+
+`work/live-bound.txt` 保存了完整列表（驱动名 + 设备名）。
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
