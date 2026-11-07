@@ -24,6 +24,7 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 | 厂商 DRM 有什么坑 | [`display/V2-DRM-AUDIT.md`](display/V2-DRM-AUDIT.md) |
 | rootfs 怎么构建、GNOME 怎么配 | [`rootfs/DEBIAN-ROOTFS.md`](rootfs/DEBIAN-ROOTFS.md) |
 | 开机那一刻发生了什么 | `git/chopin-initramfs`（`rootfs` 分支的 README） |
+| Droidloom（安卓应用）为什么跑不起来 | [`desktop/DROIDLOOM.md`](desktop/DROIDLOOM.md) |
 
 ## 目录
 
@@ -36,6 +37,11 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 | `CHARGING.md` | 电量计（BQ27Z561）+ PD 快充。含**两个上游 bug**的定位过程 |
 | `SUSPEND-ANALYSIS.md` | 挂起的三道坎，以及为什么放弃 |
 | `SUSPEND-NOTES.md` | 更早的挂起笔记 |
+
+### `desktop/`
+| 文档 | 内容 |
+| --- | --- |
+| `DROIDLOOM.md` | Droidloom 的完整尝试：Mali 支持补丁、内核缺项（binderfs/nftables/veth/DMA-BUF 堆/EROFS/syncobj）、以及卡住的 EGL/ANGLE 与 PanVK v9 |
 
 ### `gpu/`
 | 文档 | 内容 |
