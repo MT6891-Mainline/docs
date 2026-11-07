@@ -400,6 +400,50 @@ vmmc-supply    = <&LDO5>
 风险：charger/led/adc 子节点还没写（主线驱动需要 `mediatek,mt6360-chg` 等），
 充电可能暂时失效——需要一并补上，或者分两步（先稳压器，验证电源，再补充电）。
 
+
+## mt6360 后续：已经主线化，剩清理（2026-11-07）
+
+设备实测发现 **主线 mt6360 栈早就在工作**：
+
+```
+/sys/bus/i2c/devices/5-0034 -> mt6360            ← 主线 MFD 已绑定
+/sys/bus/i2c/devices/0-0055 -> bq27xxx-battery   ← 电池（主线驱动）
+/sys/bus/i2c/devices/6-0040 -> cs35l41           ← 左声道功放（主线）
+/sys/bus/i2c/devices/6-0042 -> cs35l41           ← 右声道功放（主线）
+/sys/bus/i2c/devices/7-0028 -> wl2866d-regulator ← 摄像头 LDO（主线）
+```
+
+板级 DTS 里 `subpmic@34` 就是 `mediatek,mt6360`，charger/adc/tcpc 子节点
+已经写好（端口迁移时完成）。所以新写的 `chopin-mt6360-test.dtsi` 与它重复，
+真正的任务是**删除厂商的三个死节点**。
+
+### 但删除不是无痛的
+
+厂商三个节点的 phandle 被大量引用：
+
+| 节点 | phandle | 被引用次数 | 引用者 |
+| --- | --- | --- | --- |
+| `mt6360_pmu_dts` | 0x03 | **40** | 38 个节点的 `interrupt-parent` |
+| `mt6360_pmic_dts` | 0xef | 2 | `vib_cont_td` 等 |
+| `mt6360_ldo_dts` | 0xf0 | 24 | `regulator-enable-ramp-delay` 等 |
+
+关键冲突：厂商 PMU 是 **2-cell** 中断控制器（`#interrupt-cells = <2>`，
+IRQ + 类型），主线 MFD 是 **1-cell**（`#interrupt-cells = <1>`）。38 个
+`interrupt-parent = <&mt6360_pmu>` 的节点要改成主线 MFD 的 IRQ 编号
+（`interrupts = <MT6360_IRQ_xxx>`），这是**逐节点的人工转换**。
+
+### 结论
+
+mt6360 是「**驱动已主线化、DTS 混用**」的典型：
+
+- 主线栈已经在跑 ✓（充电、电池、功放、摄像头 LDO 都正常）
+- 厂商节点是死代码 ✗，但因为**中断控制器语义不同**，删除需要逐节点转换
+- 这不是 DTS 重写的障碍，而是**清理工作量**（38 处中断引用）
+
+如果要彻底清理，可以先做一轮「中断引用转换」：把 38 个节点的
+`interrupt-parent`/`interrupts` 从厂商 2-cell 改成主线 1-cell。这需要对照
+`drivers/mfd/mt6360-core.h` 里的 IRQ 编号（`MT6360_xxx` 枚举）。
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
