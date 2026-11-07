@@ -279,6 +279,54 @@ dtc 把同名兄弟节点**合并**，于是丢了 600 个节点。
 - `work/live-bound.txt` — 92 个真实绑定设备（判断节点是否要保留的依据）
 - `build/DTS-RESTRUCTURE.md` — 本文档（全部结论）
 
+
+## i2c/spi 迁移的实测结论（2026-11-07）
+
+i2c 控制器在 `mt6893.dtsi` 里已经是主线 binding（`mediatek,mt6893-i2c` +
+`mt8192-i2c`，label 齐全）。但板级 **器件** 的盘点结果：
+
+```
+i2c0  3 个器件：bq2597x / bq27z561 / xmusb350-charger     全厂商
+i2c2  4 个器件：camera_*                                   全厂商
+i2c4  4 个器件：camera_*                                   全厂商
+i2c5  4 个器件：mt6360(✓主线) / usb_type_c / subpmic_*     1 主线
+i2c6  8 个器件：ext_buck_* / speaker_amp / cs35l41 / ...   全厂商
+i2c7  2 个器件：nfc / willsemi ldo                         全厂商
+i2c8  7 个器件：camera_*                                   全厂商
+i2c9  6 个器件：et7480 / lcd_* / bq2597x / aw8697 / ...    全厂商
+```
+
+**只有 mt6360（PMIC）是主线驱动**（`mediatek,mt6360` MFD + regulator/charger/
+adc/led/tcpc 子驱动都在主线）。
+
+其余 ~40 个器件的主线驱动**不存在**：摄像头 EEPROM、副 PMIC（bq2597x）、
+充电芯片（xmusb350）、音频开关（et7480）、扬声器功放（cs35l41）、NFC、
+LDO（wl2866d）……这些不是 DTS 重写能解决的，需要**驱动移植**。
+
+### 结论
+
+DTS 的完整「mt6895 式重写」被**厂商驱动缺失**卡住，不是卡在 DTS 本身：
+
+| 部分 | 能否重写 |
+| --- | --- |
+| i2c/spi/pinctrl/时钟/IOMMU 控制器 | ✅ 已主线化 |
+| mt6360 PMIC | ✅ 可重写（主线全支持） |
+| mmc/ufs | ✅ 已主线化 |
+| 音频 AFE | ✅ 可重写（mt8192-afe） |
+| 显示 mmsys/dsi | ✅ 可重写（mtk-drm） |
+| GPU | ✅ panfrost |
+| 摄像头 / 副 PMIC / 充电 / NFC / 音频开关 / LDO | ❌ 需驱动移植 |
+
+### 现实路线
+
+1. 保留 `work/chopin-pruned.dts`（8,740 行）作为**剪枝基线**
+2. 只对**主线驱动已就绪**的外设做 label 化重写（mt6360、音频、显示）
+3. 厂商外设保持现状（厂商 binding 的节点跟着板级文件走）
+4. 完整的 mt6895 式干净 DTS，要等对应驱动移植完成
+
+这个结论也解释了为什么之前的 label 自动转换会失败：**大部分节点注定要保留
+厂商风格**，强行统一 label 没有意义。
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
