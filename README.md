@@ -48,6 +48,13 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 | --- | --- |
 | `DROIDLOOM.md` | Droidloom 的完整尝试：Mali 支持补丁、内核缺项（binderfs/nftables/veth/DMA-BUF 堆/EROFS/syncobj）、以及卡住的 EGL/ANGLE 与 PanVK v9 |
 
+### `display/`
+| 文档 | 内容 |
+| --- | --- |
+| `MAINLINE-DRM.md` | 从厂商 mediatek_v2 DRM 迁到主线 mtk-drm 的评估：驱动已支持 MT6893，缺 DTS 和面板驱动 |
+| `DRM-CLOCK-GAP.md` | 显示时钟链路 |
+| `V2-DRM-AUDIT.md` | 厂商 DRM 的坑 |
+
 ### `gpu/`
 | 文档 | 内容 |
 | --- | --- |
