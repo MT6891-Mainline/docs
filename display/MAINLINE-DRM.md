@@ -121,6 +121,65 @@ dsi0:  dsi@14010000   { ... };
 2. 对照 MTK BSP 的 `mt6893/mt6885` 的 `disp_dts_gpio` / `DDP` 地址表
 3. 确认后再写 dtsi 节点
 
+
+## 显示 DTS 的机械迁移（2026-11-07，驱动不变）
+
+用户确认：显示驱动不需要动，只迁移 DTS。按此重新分类——**保持厂商
+`mediatek_v2` DRM 驱动不变**，只把节点从切片文件重组成 SoC/板级两部分。
+
+### SoC 部分：84 个节点，993 行
+
+已提取到 `work/chopin-display-soc.dtsi`：
+
+| 类别 | 节点 |
+| --- | --- |
+| 显示子系统配置 | `dispsys_config@14116000`、`disp_mutex@14117000` |
+| DDP 主路径（DSI0） | `disp_ovl@14000000/14001000/14002000`、`disp_rdma@14003000/14005000`、`disp_wdma@14006000`、`disp_color@14007000`、`disp_ccorr@14008000`、`disp_aal@14009000`、`disp_gamma@1400a000`、`disp_dither@1400b000`、`disp_postmask@1400d000`、`disp_rsz@1400c000` |
+| DDP 第二通道（DSI1） | 1410xxxx 段同样的组件 |
+| DSI / PHY | `dsi@1400e000`、`dsi@1410e000`、`mipi_tx_config@11e50000/11e60000`、`disp_dsc_wrap@14124000` |
+| MDP（相机/视频后处理） | `mdp_*@1f0xxx` 共 29 个 |
+| SMI / LARB | `disp_smi_common@14002000`、`mdp_smi_common@1f002000`、`smi_larb4/5/13-20` |
+| PWM / 其他 | `disp_pwm0@1100e000`、`disp_merge@14015000/14115000`、`dsi_te`、`mtkfb` |
+
+### 板级部分：面板
+
+当前生效的面板是 **`l16_36_02_0b_dsc_vdo,lcm`**（不是 k10a；DTS 里两个都
+有，`panel@0` 用 l16）。已提取到 `work/chopin-panel.dtsi`：
+
+```dts
+&dsi0 {
+	panel@0 {
+		compatible = "l16_36_02_0b_dsc_vdo,lcm";
+		reg = <0x0>;
+		reset-gpios = <&pio 42 GPIO_ACTIVE_HIGH>;
+		dvdd-supply = <&...>;
+		backlight = <&...>;
+		port {
+			endpoint {
+				remote-endpoint = <...>;
+			};
+		};
+	};
+};
+```
+
+### 迁移还剩的步骤
+
+1. 给 `dsi@1400e000` 加 label（厂商节点没有 label，`&dsi0` 需要它）
+2. 把 `chopin-display-soc.dtsi` 的 84 个节点并入 `mt6893.dtsi`（或作为
+   `mt6893-display.dtsi` 被 dtsi include）
+3. 把 `chopin-panel.dtsi` 并入板级 dts
+4. 编译 → 刷 boot → 验证显示（DPMS off/on，不做真 suspend）
+
+**驱动不变**：`CONFIG_DRM_MEDIATEK_V2=y` 保持，`CONFIG_DRM_MEDIATEK=y`
+（主线）可以继续留着不绑定。
+
+### 注意：厂商时钟提供者
+
+显示节点用 `dispsys`（厂商的显示时钟/复位提供者，节点无 reg）作为时钟源，
+而 `mt6893.dtsi` 里已经有主线的 `clk-mt6893-mm`。两者在现有工作 DTB 里
+**共存**（显示正常工作），迁移时保持这个状态即可，不要删除任一。
+
 ## 参考
 
 - `port/mt6895-linux/arch/arm64/boot/dts/mediatek/mt6895.dtsi`（同代 SoC 的
