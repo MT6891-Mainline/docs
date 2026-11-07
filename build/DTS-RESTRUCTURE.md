@@ -92,6 +92,47 @@ mt6893-xiaomi-chopin.dts  ~1449 行  板级：引脚、器件、面板、传感�
 把合并后的完整 DTS 保存为参考基线（`work/chopin-full.dtsi`，12,096 行），
 下次从 **mmc 节点**开始重写。
 
+
+## 数据驱动的清理路径（2026-11-07 实测）
+
+用当前能启动的 DTB 统计：
+
+```
+DTB 里 mediatek compatible：618 个
+  ├─ 有驱动：106 个   ← 真正的 DTS 内容
+  └─ 无驱动：512 个   ← 厂商死节点（对应驱动根本没编）
+```
+
+样本（无驱动）：`mediatek,mfb`、`mediatek,venc_gcon`、`mediatek,smi_larb7`、
+`mediatek,ap_ccif0..5`、`mediatek,adsp_*`、`mediatek,aee_debug_kinfo`、
+`mediatek,apcldmain*`、`mediatek,ap_md_*` …
+
+**结论：DTS 重整的正确顺序是先删死节点，再重写活节点。**
+
+1. **删死节点**（512 个）：没有驱动绑定它们，删除不改变行为；唯一要小心的是
+   它们被活节点用 phandle 引用的情况（如 smi/larb、clock controller），需要
+   先做引用图分析，保留被引用的。
+2. **重写活节点**（106 个）：这才是 mt6895 风格的目标 DTS（SoC 部分 + 板级
+   部分），按外设分节、用 label。
+
+删完之后 DTS 预计从 12,096 行降到 2,000–3,000 行，和 mt6895 的规模相当。
+
+### 工具产物
+
+- `work/compatibles.txt`：DTB 里全部 686 个 compatible
+- `work/driver-compat.txt`：树里 1,503 个 mediatek 驱动 compatible
+- `work/dead-compat.txt`：512 个无驱动 compatible
+- `work/board.dts`：当前 DTB 的反编译（节点/引用图分析用）
+- `work/chopin-full.dtsi`：30 个切片合并后的 12,096 行全文
+
+### 下一步（删死节点）
+
+1. 从 `work/board.dts` 提取死节点的完整路径与 phandle
+2. 构建引用图：哪些死节点的 phandle 被活节点引用
+3. 未被引用的死节点 → 从对应切片文件里删除（按节点边界）
+4. 被引用的 → 保留节点但可简化
+5. 编译 + 刷 boot 验证
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
