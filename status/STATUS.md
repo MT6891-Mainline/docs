@@ -1,8 +1,8 @@
 # chopin (Redmi Note 10 Pro / MT6891) 主线 Linux 移植 —— 当前状态
 
-> 最后更新：2026-10-31
-> 镜像：`out-scp-v154-rootfs/boot-stockdt.img`
-> 内核：`7.3.0`，分支 `7.3.0-mt6891-xiaomi-chopin`，构建号 `#172`
+> 最后更新：2026-11-07
+> 镜像：`out-scp-v187-rootfs/boot-stockdt.img`
+> 内核：`7.3.0`，分支 `7.3.0-mt6891-xiaomi-chopin`，构建号 `#197`+
 
 ## 1. 能用什么
 
@@ -11,7 +11,8 @@
 | 启动 | ✅ | preloader → LK → GenieZone → Linux，无 U-Boot/UEFI |
 | 显示 | ✅ | 厂商 `mediatek_v2` DRM，1080x2400 |
 | 触摸 | ✅ | |
-| 桌面 | ✅ | GNOME (gdm + Wayland)，自动登录 `kily` |
+| 桌面 | ✅ | **Denial**（v0.6.2，tty1 自动登录 `kily` 后 `denial-session`） |
+| Droidloom（安卓应用） | ❌ | cell 能启动到 zygote，SurfaceFlinger 因 EGL/ANGLE 崩溃循环；见 [`desktop/DROIDLOOM.md`](../desktop/DROIDLOOM.md) |
 | 硬件渲染 | ✅ | panfrost (Mali-G77)，**810 MHz** |
 | 音频 | ✅ | `mt6893mt6359` 声卡 |
 | WiFi / 蓝牙 | ✅ | |
@@ -110,12 +111,19 @@
 | `c92ef7a44` | **DTS 声明 9V/12V PD PDO** |
 | `ff801f20a` | tcpci_mt6360 补 POWER_CTRL + LOOK4CONNECTION |
 | `ee59e0e0e` | **tcpci_mt6360 unmask alerts（PD 真因）** |
+| v183 | 内置 `ANDROID_BINDER_IPC/BINDERFS`、`NF_TABLES`（Droidloom 前置） |
+| v184 | **panfrost `DRIVER_SYNCOBJ_TIMELINE`**（Denial 显式同步 / Droidloom syncobj 绑定失败的真因） |
+| v185 | 内置 `DMABUF_HEAPS_SYSTEM/CMA`（`/dev/dma_heap/system`） |
+| v186 | 内置 `VETH` + 全套 nftables（私有 cell 网络） |
+| v187 | 内置 `EROFS_FS(+ZIP)`、`FUSE_FS`、`OVERLAY_FS`（Android 镜像格式） |
 
 ## 7. 镜像清单
 
 | 镜像 | 说明 |
 | --- | --- |
-| **`out-scp-v154-rootfs`** | ✅ **当前推荐**（PD 快充 + 全部修复） |
+| **`out-scp-v187-rootfs`** | ✅ **当前推荐**（Denial + Droidloom 内核前置：binderfs/nftables/veth/DMA-BUF 堆/EROFS/syncobj） |
+| `out-scp-v184`…`v186` | ✅ 中间版本（依次修 syncobj / DMA-BUF 堆 / veth+nftables） |
+| `out-scp-v154-rootfs` | ✅ PD 快充 + 全部修复（旧基线） |
 | `out-scp-v151-rootfs` | ✅ 真库仑计可用 |
 | `out-scp-v143-rootfs` | ✅ 熄屏恢复不放弃 |
 | `out-scp-v139-rootfs` | ✅ GPU 810MHz 基线（无后续修复） |
