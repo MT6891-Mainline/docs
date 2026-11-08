@@ -147,6 +147,30 @@ journalctl -b -p warning | tail -20
 若 SSH 进不去（用户态已停），则改为：**不插 USB 开机 → 等到卡住 → 插 USB 让它起来 →
 `journalctl -b` 看这次 boot 里在插线之前发生了什么**（日志是同一 boot 的，能追溯）。
 
+## 4.5 USB 子系统诊断（2026-11-08 夜，真机抓取）
+
+| # | 现象 | 证据 | 影响 |
+| --- | --- | --- | --- |
+| 1 | `g_serial` 与 UDC 竞速 | `[1.58] UDC core: g_serial: couldn't find an available UDC` → `[1.90] g_serial ready` / `mtu3: gadget (high-speed) pullup D+` | 串口 gadget 绑定偏晚；`serial-getty@ttyGS0` 的启动随之抖动——正是 §3.1 那把 `/dev/console` 锁被反复争抢的诱因 |
+| 2 | **`mt6360-tcpc` 注册失败** | `[1.66] mt6360-tcpc: Failed to register tcpci port` | **没有 Type-C 状态机**：`/sys/class/typec/port0` 显示 `data_role=host`、`power_role=source`，而支持集只有 `device`/`sink` → 插拔线不会产生正常的 role-switch/PD 事件，gadget 生命周期不稳定 |
+| 3 | i2c 客户端重复注册 | `i2c-5: Failed to register i2c client subpmic_pmic at 0x1a (-16 EBUSY)` | DT 里的 `subpmic_pmic@1a`（`mediatek,subpmic_pmic`，树内无匹配驱动）与另一次注册冲突 |
+| 4 | `usb_type_c@4e` 被禁用 | `mt6893-xiaomi-chopin.dts`: `usb_type_c@4e { status = "disabled" }` | 供应商的 type-c 子模块未启用 |
+
+其它已确认正常：UDC `11201000.usb` 存在且 state=`configured`；`usb-gadget.target` active；
+`/dev/ttyGS0` 存在；充电（`mt6360-chg`）正常，插线能读到 `online=1`、`status=Charging`。
+
+**结论**：#2 是 USB 侧最值得修的一处。修好它，插拔线行为变确定，也能消掉"gadget 抖动 →
+串口 getty 反复重启"这个变量。
+
+**下一步（诊断，非盲改）**：
+
+1. 在 `tcpci_mt6360_probe()` 的失败分支打印 `PTR_ERR(mti->tcpci)` 的具体错误码
+   （现在只有 "Failed to register tcpci port"，没有 errno）；
+2. 若为 `-EIO/-ENXIO`，说明 `tcpci_init()` 读 `TCPC_ALERT` / `TCPC_VERSION` 时 I2C 访问失败
+   → 查父 regmap（mt6360 @ i2c-5 0x34）与 §3 里那条 EBUSY 的关系；
+3. 核对 DT 里 `mediatek,mt6360-tcpc` 节点的 `interrupts` / `interrupt-names = "PD_IRQB"`
+   是否指向 PMIC 的正确 IRQ（`platform_get_irq_byname` 失败时 probe 会静默返回）。
+
 ## 5. 下次现场如何取证（重要）
 
 **关键前提：卡住时 WiFi 可能还活着**（本次就成功 SSH 进去过）。所以先试 SSH，别急着重启。
