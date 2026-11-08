@@ -258,6 +258,29 @@ $ ta_host32 goodix.ta probe 1001 1 1
 > Large reads: the TEE platform clocks a dummy byte after the command.
 > Small reads instead get a leading status byte in the response.
 
+
+### M1.8 卡点的真因：32 位进程打不到 ioctl（2026-11-08）
+
+`gf_hw_detect_sensor` 读寄存器 0x0000 报 `GF_ERROR_SPI_TRANSFER_ERROR (1023)`，
+再往下追是 `[gf_spi_write] drSpiSend failed ret=0xFFFFFFFF` —— 我们的 stub 返回了
+`-1`。`errno = 25 (ENOTTY)`。
+
+原因是 **compat ioctl**：`goodix_fp` 有 `.unlocked_ioctl` 但没有 `.compat_ioctl`，
+32 位进程（我们的 ta_host32）根本进不到驱动里。64 位的 python 调同一个 ioctl
+是成功的：
+
+```
+64-bit ioctl ok  rx=00 00 00 00 ...     # python3 直接打 0xc0206726
+32-bit ioctl    -> ENOTTY              # ta_host32
+```
+
+修法一行：`.compat_ioctl = compat_ptr_ioctl`（提交 `5b1be39`，镜像 v203）。
+顺手把 `gf_raw_xfer` 的 tx/rx 不等长改成补零对齐，这样"发 3 字节、不要回读"
+也能工作。
+
+**这一条特别值得记**：它是"用户态跑 32 位 TA"这条路线独有的一类坑——内核侧
+一切正常、协议也正常，只是 ABI 边界上少了一个回调。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
