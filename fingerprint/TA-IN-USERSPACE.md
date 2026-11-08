@@ -1171,3 +1171,167 @@ enroll（cmd **1007**）的 token 里 `msg[0x3]` 是版本、`msg[4..7]` 是 cha
   `0x023a → 0xc6`：DAC 校验用 `[0x2ab324+0xe4]=0xc6` 与读回值比对，
   在真机上**是通过的**（离线回放曾经误报 dac error，因为回放按序号对齐，
   请求 `f0 02 20` 拿到了录制里 `f0 00 a2` 的应答——回放工具的这个偏差要记住）。
+
+---
+
+## 2026-11-08 深夜（第三轮）：enroll 跑通，卡在 capture 的派发
+
+这一轮把 enroll 从"报错"推进到"会话能开、token 能过、SPI 能配传感器"，
+并且**修掉了一个一直伪装成 TA 崩溃的宿主 bug**。剩下的是 TA 自己的
+capture 派发。
+
+### M1.34 ⭐ "Illegal instruction" 是 musl 的堆损坏陷阱，不是 TA 的错
+
+现象：enroll 走到最后总是
+
+```
+[cp] open type=0x7 algo=0x7004
+Illegal instruction      (rc=132/139)
+pc=0x10005954  lr=0
+```
+
+`0x10005954` 处是 `.word 0xe7f000f0`（ARM `udf #0`），这是 **musl 的
+`a_crash()`**：`free()` 检测到堆 chunk 损坏时主动陷阱。也就是说崩溃点在
+**宿主自己的堆**，跟 TA 的异常路径无关。
+
+根因：我们在 `req` / `plan` 里按 `in_len + out_cap` 分配请求缓冲区，
+而 `out_cap = 0`（或很小）时，TA 仍会往输出区写东西 → 越界写进 musl 堆。
+**给 4 KiB 之后崩溃彻底消失**，enroll 正常返回 0。
+
+```
+# 现在 req/plan/enroll 默认 out_cap = 4096
+printf '1000 - 4096\n1001 - 4096\n1005 - 4096\n' | ...
+```
+
+> 这也是"崩溃地址每次都不一样、而且总落在宿主 musl 里"的原因。
+
+### M1.35 命令 ABI 的两个补充
+
+1. **第三个参数是请求长度**，不是指针。`ut_pf_fp_invoke_command(desc, req,
+   len)`，TA 内部用 `len - 0x10` 定位 payload；`len` 的取值会改变派发分支
+   （给 0 和给 100 走的路不同，后者报 `GF_ERROR_BAD_PARAMS`）。
+   `plan` 现在支持第 5 列显式指定它：`1021 - 4096 1 100`。
+2. **`desc` 的形态也有影响**：`descriptor`（`&cmd` + `&origin`，即 `run`/`cap`
+   模式）和 `request`（16 字节头 + payload）在 TA 里会走不同分支，
+   capture 尤其明显（见 M1.41）。
+
+### M1.36 ⭐ `cmd 1005` 是算法初始化（我们一直在跳过）
+
+之前所有实验都漏了这条命令。它会打印：
+
+```
+[gf_algo_common][gf_algo_common_init] chip_series=1
+[gf_algo_common][gf_algo_common_init] flag_chip_info=304611589
+[gf_algo_common][gf_algo_common_init] thr_select_bmp=600
+[gf_algo_common][gf_algo_common_init] sensor_id=0x47,0x5A,0x59,0x34,0x38,0x31,0x30,0x39,...   → "GZY48109"
+[gf_algo_common][gf_algo_common_init] max_fingers=32
+[gf_algo_common][gf_algo_common_init] max_fingers_per_user=5
+```
+
+也就是说 **`max_fingers_per_user` 本来就应该由 1005 设置**——之前用
+`GF_POKE=0x2b9dcc=5` 是绕路，正确做法是先调 1005。1005 自己会做 31 次 SPI。
+
+所以正确的启动序列是：
+
+```
+DETECT(1000) → INIT(1001) → ALGO_INIT(1005) → PRE_ENROLL(1006) → ENROLL(1007)
+```
+
+### M1.37 enroll 是一个会话，不是一条命令
+
+从设备日志抓到的关键行：
+
+```
+[gf_algo_common][gf_algo_common_pre_enroll] g_enrolling_finger is not NULL
+```
+
+`ENROLL(1007)` 成功一次之后，TA 把会话记在 `g_enrolling_finger` 里，**之后的
+`PRE_ENROLL` 全部被拒**；同时 `gf_hal_common_enroll`（0x1f4bc / 0x1f60c）在
+enroll 成功后会立刻再发一条 **1021（camera_capture）**。
+
+所以 per-touch 的循环应该是：
+
+```
+PRE_ENROLL → ENROLL            （只做一次，开会话）
+for each finger touch:
+        wait IRQ → CAMERA_CAPTURE(1021)
+POST_ENROLL(1008)              （落盘）
+```
+
+challenge 是**一次性**的：复用同一个 token 再 enroll 会报
+`GF_ERROR_INVALID_CHALLENGE (1056)`；因为我们的 `ut_pf_cp_rd_random` 固定返回
+0x42，challenge 恒为 `0x42424242`，放在 token 的 `msg+4`。
+
+### M1.38 `1008` 是 POST_ENROLL
+
+`gf_hal_common_post_enroll` = `mov w0,#0x3f0` → **cmd 1008**（`0x1f6d8`）。
+
+### M1.39 其它命令的结论（省得再试）
+
+| cmd | 结论 |
+| --- | --- |
+| 1025 / 1026 | `GF_ERROR_UNKNOWN_CMD (1070)`，此固件不支持 |
+| 1016 | 会走 `gf_hal_invoke_command(…, 0x15c)` 的同一族，但裸调会 SEGV（需要 payload） |
+| 1010 | ESD 检查（`gf_hal_check_esd`），+4 SPI |
+| 1020 | `set_safe_class`，104 字节 buffer，`class` 在 `+0x64` |
+| 0x401 / 0x402 | 不是 TA 命令：HAL 的 IRQ 路径用它们调 `gf_hal_notify_acquired_info` / `gf_hal_notify_error_info` |
+
+HAL 侧对应关系（`libgf_hal.so`）：
+
+```
+gf_hal_common_camera_capture → gf_hal_invoke_command_ex(0x3fd)   100 字节请求
+gf_hal_common_enroll        → invoke(1, 0x3ef, buf, 0xb4) 然后 0x3fd
+gf_hal_common_pre_enroll    → invoke(1, 0x3ee, buf, 0x70)       112 字节
+gf_hal_common_post_enroll   → gf_hal_invoke_command_ex(0x3f0)
+hal_milan_an_series_init    → gf_hal_invoke_command(0x3e9, buf, 0x15c) 然后 0x3f8
+```
+
+### M1.40 INIT 的 348 字节 payload 是什么
+
+`hal_milan_an_series_init` 里：malloc(0x15c) → 清零 → `gf_hal_get_fw_info()`
+→ `gf_hal_common_load_otp_info_from_sdcard(buf+0x90, …)` → `memcpy` 0xc0 字节。
+也就是 **fw_info + /sdcard 上的 OTP 备份**；没有备份时这份 payload 本来就基本
+全零，所以我们现在传全零是**正常**的（不是 capture 不工作的原因）。
+
+### M1.41 当前唯一卡点：`1021` 在派发阶段就返回
+
+逐指令 trace（`-d exec` 全量，7.8 GB，取尾部）显示，capture 调用执行的最后
+几条 TA 指令是 `0x176b6 → 0x176d2 → 0x17620`（`b 0x17620` 就是返回），
+即 **`0x175d0` 这个通用入口里 `(CONST + cmd) > 0x5b` 的"不支持"分支**，
+而真正按 cmd 查表跳转的 `0x176d4`（`ldr r0,[r7,r1]; mov pc,r0`）根本没执行到。
+
+实测三种形态：
+
+| 调用形态 | 结果 |
+| --- | --- |
+| `desc{0,0,1}` + `&cmd` + `&origin`（`cap`/`run` 模式） | **+20 SPI**（把传感器切到 FTD down），然后返回 |
+| 同上，但已经先跑过 `1005` | **+0 SPI**，一个 stub 都不碰 |
+| `req` 形态（16 字节头 + payload） | +0 SPI，不碰传感器 |
+| `desc[0]=1` 或 `2` | +0 SPI |
+| `desc[2]=2` | `GF_ERROR_BAD_PARAMS` |
+| `desc[2]=3` | `GF_ERROR_UNKNOWN_CMD` |
+
+也就是说：**1021 在我们这个状态下只会做一次"arm"（配置传感器 + 切 FTD down），
+之后就什么都不做。** 手指按下时 IRQ 正常（设备上 6/6 次都触发），但 capture 不读图。
+
+下一步要解决的正是这个"arm 之后谁去真正取样"的问题。两个方向：
+
+1. **把 `0x175d0` 的派发读透**：`CONST + cmd` 里的 CONST 决定走哪条路，
+   而 `0x176d4` 的跳转表在 `0x1793c`（`table[(CONST+cmd)]`）。先静态把
+   `0x1764a` 那个 pool 常量取出来（注意 Thumb ldr 的 PC 对齐），就能知道
+   为什么 1021 被判"不支持"，以及正确的入口是什么。
+2. **看 TA 期望谁在 IRQ 之后调用它**：`hal_milan_irq` / `irq_image_enroll_or_authenticate`
+   里除了通知调用还有 `hal_milan_authenticate_success` 这类函数，读一遍就能
+   知道"手指沿到来"之后 HAL 实际发的是哪条命令。
+
+### 本轮新增/改动的工具能力
+
+| 能力 | 用法 |
+| --- | --- |
+| 完整 enroll 流程（IRQ 驱动） | `./ta_host32 goodix.ta enroll 6 20000` |
+| 指定要试的采集命令 | `GF_CAPS=1021,1005 ./ta_host32 … enroll 1 20000` |
+| 每轮重新 pre_enroll（调试用） | `GF_ENROLL_EACH=1 ./ta_host32 … enroll …` |
+| plan 指定请求长度 | `plan.txt`: `<cmd> <file\|-> <out_cap> <sub> <len_hint>` |
+| 每条命令之后看最后碰到的 stub | plan 输出里的 `last=` |
+| 崩溃时打印 TA 调用栈 | 自动（扫描栈上落在 TA 代码段的值） |
+| 加密上下文重复 close 保护 | 自动（`[cp] close: stray ctx ...`） |
