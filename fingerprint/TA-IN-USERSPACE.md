@@ -942,3 +942,230 @@ scp hello32 root@192.168.0.108:/tmp/ && ssh root@192.168.0.108 /tmp/hello32
 ```
 
 hello world 一过，M1 就是纯写代码的事。
+
+---
+
+## 2026-11-08 晚（第二轮）：门、ABI、token、存储
+
+新一轮把上一份交接里"M1.25 下一轮第一步"的问题解掉了，并且顺着推进到了
+**enroll 命令**（录入），现在只剩一个明确的卡点。全部实验都能离线复现，
+不需要手机。
+
+### M1.27 ✅ `milan_check_finger_up` 到底在比什么
+
+上一轮把注意力放在 `0x25b9c` 的 `cmp r0, r3`，但没读出三个输入的语义。
+这一轮用 qemu 的**逐指令 + 全寄存器** trace 一次看清了。先记住函数边界：
+
+| 东西 | 地址 |
+| --- | --- |
+| `milan_check_finger_up` 入口 | `0x25b18`（Thumb） |
+| 12 个区域逐个比较 | `0x25b84` – `0x25cce` |
+| 某个区域失败 | 各自的尾巴 `0x25d8e`/`0x25d92`/…/`0x25dc8` |
+| 汇总日志（fdt / down / area） | `0x25d5e` |
+| 共享门 `r5 < [r6+0xfc]` | `0x25cd2` |
+| 错误返回 `GF_ERROR_FINGER_NOT_LEAVE` | `0x25d16` 起，`r5=0x429=1065` |
+
+真实语义（寄存器实测）：
+
+```
+r6      = 0x2ab324                     ; TA 全局
+config  = [r6+0x3c]                    ; = 0x139d48，传感器配置结构
+r4      = ldrh[config+0x420]           ; = 0x20
+delta_up= ldrb[config+0x634 + (0x82 - ldrh[config+0x630])]   ; = 0x13
+area_i  = 0x84 - r4 + 2*i              (i = 0..11)
+down_i  = ldrb[config+0x424 + area_i]   ; = 0xb3（i=0）
+avg_i   = fdt_average_data[i]           ; 由 0x256d5 "get FDT average data" 填在栈上
+```
+
+比较：**失败**（`b` 到 `0x25d8e`+）的条件是
+`down_i - delta_up >= avg_i`（`blt` 不成立）。也就是
+`0xa0 >= 0x08` → 报 `area[0] is finger down`。
+
+日志原文（设备上抓的）：
+
+```
+[gf_milan][milan_check_finger_up] delta_up=0x13
+[gf_milan][milan_check_finger_up] fdt_average_data[0]=0x0008
+[gf_milan][milan_check_finger_up] g_milan_chip_handle.config->fdt_down.data[100]=0x00B3
+[gf_milan][milan_check_finger_up] area[0] is finger down
+[gf_milan][milan_check_finger_up] finger is not leave, i=0
+```
+
+`i` 是**区域的编号**（0..11，全部通过时 `r5=0xc`），不是重试计数——上一轮
+"i 由调用方推进"的推论可以作废。
+
+### M1.28 ✅ 过门的正确补丁：`GF_PATCH_GATE=2`
+
+上一轮 patch 的是共享门 `0x25cd8`，但那不是失败点；真正把控制流带走的是
+**12 个区域各自的失败分支**：
+
+```
+0x25ba0 0x25bbc 0x25bd8 0x25bf4 0x25c10 0x25c2c
+0x25c48 0x25c64 0x25c80 0x25c9c 0x25cb8 0x25cd0
+```
+
+把它们 NOP 掉（全是 2 字节 `b`），函数就会一路走到"12 区域全部通过"的
+`r5=0xc` 分支。`GF_PATCH_GATE=2` 就是这个（`=1` 仍是老的 `0x25cd8`）。
+设备上验证：门的日志消失，流程继续走到 `gf_hw_set_mode`。
+
+### M1.29 ✅ qemu 逐指令 trace（本轮最有用的小工具）
+
+```
+GF_REPLAY=spi2.rec qemu-arm -B 0x10000000 -one-insn-per-tb \
+    -d exec,cpu -dfilter 0x25b18+0x2b0 -D qemu.log ./ta_host32 goodix.ta cap 1
+PYTHONPATH=work/env/pylibs python3 ta_xrun.py qemu.log
+```
+
+`-d exec,cpu` 是**每次执行**都 dump 一份寄存器（`in_asm` 是翻译期、每条只记
+一次，容易误读）。配合 `-dfilter` 只保留关心的地址段，输出是"指令 + 全寄存器"
+的执行序列，`ta_xrun.py` 再把每条指令和寄存器值拼成一行。上一轮靠猜的
+`r5/r6/r1/r7/r3`，这一轮 3 条命令就出来了。
+
+> 注意：`-D` 的输出**不要写 `/tmp`**：每次 bash 调用是独立的 mount namespace，
+> 下一条命令看不到。写到 `port/fingerprint/ta32/work/` 下。
+
+### M1.30 ⭐ 命令 ABI：带 payload 的调用方式
+
+之前只会用 `desc[8] + *cmd` 调"无 payload"的命令。真正的形态是
+`ut_pf_fp_invoke_command(desc, req, len)`：
+
+```
+req[0]  u32  cmd_id            (输入)
+req[4]  u32  in_len            (输入)
+req[8]  u32  out_cap           (输入) → 也被 TA 当作 out_len 回写
+req[12] u32  status            (0)
+req[16] ...  payload
+len     = payload 长度（TA 内部会 len-16 再算指针）
+```
+
+`desc` 仍然是 `{0, 0, sub, 0, ...}`（`sub=1` 走正常族）。`req` 必须**常驻**：
+TA 会长期持有这个缓冲区里的指针（在 `plan` 里把同一个 `req` 释放掉会直接
+SIGILL）。
+
+新增模式：
+
+```sh
+./ta_host32 goodix.ta req  1007 enroll.bin 0 1     # 单条带 payload
+./ta_host32 goodix.ta plan plan.txt                # 一串命令，同一进程
+# plan.txt 每行: <cmd> <payload 文件|-> [out_cap] [sub]
+```
+
+这也是为什么以前 `DETECT`/`INIT` 必须分两次进程就做不成事：TA 的初始化状态
+在同一进程内累积。
+
+### M1.31 ✅ 真 HMAC-SHA256，enroll token 通过了
+
+`gf_ta_enroll` 的流程（`0x171d0` 起）：
+
+```
+memcpy(sp+0x1c, struct+0x6e, 0x45)      ; token 块
+memset(sp+0x41, 0, 0x20)
+token_auth(sp+0x1c)                     ; 0xa830 → 0xa538
+memcmp(sp+0x41, struct+0x93, 0x20)      ; 不相等 → "token authenticate failed"
+```
+
+`token_auth` 里走的是 memcrypto 导入：
+
+```
+ut_pf_cp_open(&ctx, 3, 0x3003)          ; TEE_ALG_HMAC_SHA256
+ut_pf_cp_mc_start(ctx, key, 0x20)       ; key 来自 ut_pf_km_get_hmac_key
+ut_pf_cp_mc_update(ctx, msg, 0x25)
+ut_pf_cp_mc_finish(ctx, out, &len)
+```
+
+所以：
+
+* `ut_pf_cp_mc_*` 必须是真的 HMAC-SHA256（原来返回固定 32 字节 `0x11`，
+  永远过不了）；
+* `ut_pf_km_get_hmac_key` 的真实签名是 `(key_out, &key_len)`，第二个参数是
+  **长度指针**（调用点 `0xa55c`），不是长度；
+* token 块 = `msg[0x25] || HMAC(msg)[0x20]`，放在 enroll payload 的 `+0x6e`。
+
+自检：`./ta_host32 goodix.ta hmactest` 打印 RFC 4231 test 1 的结果。
+
+`mk_enroll.py` 生成这份 180 字节的 payload（含 token）。
+
+### M1.32 ✅ 受信存储的 ABI 是反的（原来一直是错的）
+
+TA 的封装（`0x9c0c` / `0x9d18` / …）**直接把 r0 当句柄/大小用**：
+
+```
+handle = ut_pf_ts_cp_open(name, flags, &slot);   0 → GF_ERROR_OPEN_SECURE_OBJECT_FAILED (1033)
+size   = ut_pf_ts_cp_size(handle, &size_slot);   0 → GF_ERROR_READ_SECURE_OBJECT_FAILED (1034)
+nread  = ut_pf_ts_cp_read(handle, buf, len);
+nwrite = ut_pf_ts_cp_write(handle, buf, len);
+```
+
+之前实现成"成功返回 0"，于是每个"对象不存在"的探测都被当成"大小为 0 的对象"，
+后面一堆 `size=4294901761` 的怪现象都是这个。改完之后 `so(...) not exist`
+路径才是正常的。
+
+### M1.33 ✅ pre_enroll 的 challenge，以及新的卡点
+
+`hal_milan_an_series_pre_enroll`（和 `gf_hal_common_pre_enroll`）用的是
+**cmd 1006**，112 字节缓冲。TA 会把 `ut_pf_cp_rd_random` 的结果写到
+`buffer+0x68`（我们 stub 填 `0x42`，所以是 `4242424242424242`）。
+
+enroll（cmd **1007**）的 token 里 `msg[0x3]` 是版本、`msg[4..7]` 是 challenge：
+
+| token 内容 | 结果 |
+| --- | --- |
+| `msg[0..3]=0x42424242` | `invalid hat version code` (1055) |
+| `msg[0..3]=0`、challenge 放 `+4` | **token + challenge 都过** |
+| challenge 放 `+12/+16/…` | `invalid challenge detected` (1056) |
+| 没有先跑 1006 | `invalid challenge detected` |
+
+顺序必须是 `DETECT(1000) → INIT(1001) → PRE_ENROLL(1006) → ENROLL(1007)`，
+而且**同一进程**。
+
+### 现在的唯一卡点：fingerlist 的 `max_count = 0`
+
+```
+[gf_fingerlist][gf_fingerlist_is_enroll_allowed] up to the limit, used_count:0, max_count:0
+→ GF_ERROR_REACH_FINGERS_UPLIMIT (1005)
+```
+
+`max_count` 是 `[0x2b9cc8 + 0x104]`（= `0x2b9dcc`）。实测：
+
+* DETECT、INIT 之后这个字段**仍然是 0**（不是初始化阶段写进去的）；
+* 用 `GF_POKE=0x2b9dcc=5` 手工写 5，enroll 立刻越过这个检查，继续往下走
+  （又发了 273 字节配置写），然后 `SIGILL` 跳到宿主 musl 的代码里——因为
+  `finger_0_0.so` 不存在 → fingerlist 为 NULL →
+  `[gf_ta] fingerlist is null set mode key`，TA 在这种状态下走了一条我们没
+  实现的异常/回调路径。
+
+所以下一步很清楚：
+
+1. 弄清 `max_count` 该由谁写。现在怀疑和 `gf_memmgr_config.so` 同源
+   （配置全零）。可以静态找 `0x2b9cc8+0x104` 的写入点，或者在
+   `gf_fingerlist_init` 的调用链上找参数来源。
+2. 让 fingerlist 变成"合法空表"。TA 的第一次录入本来应该自己创建
+   `finger_0_0.so`，但需要 `max_count > 0` 且列表指针非空。可能需要：
+   * 先跑一次会创建列表的命令（`gf_fingerlist_add` 在 post_enroll 之后，
+     鸡生蛋问题）；
+   * 或者把 `gf_so_save_persistent_object` / TS 的 create 路径
+     （`flags & 1`）确认走通，让 TA 有机会落盘。
+3. 一旦 fingerlist 合法，enroll 就会进入真正的采集（`camera_capture` 内部
+   会重新过 `milan_check_finger_up`），那时才需要判断"门 + 真图"是否都正常。
+
+### 本轮新增的工具一览
+
+| 工具 | 作用 |
+| --- | --- |
+| `ta_xrun.py <qemu.log>` | qemu 逐指令 trace + 反汇编 + 寄存器注解 |
+| `ta_find.py "<字符串>"` | 找引用某 rodata 字符串的代码 |
+| `hal_dis.py <符号>` | 反汇编 `libgf_hal.so`（aarch64），符号来自 debugdata |
+| `mk_enroll.py` | 生成 180 字节 enroll payload（含 token/HMAC） |
+| `ta_host32 req/plan` | 带 payload 的单条/整串命令 |
+| `GF_POKE=<addr>=<val>` | 每条命令前写 TA 数据段（INIT 会重置全局，所以必须每命令前写） |
+
+### 本轮已验证的原始数据
+
+* `spi2.rec` / `work/dac-dev.rec` 里 `0x00a2` 的**第一次**读永远是
+  `00 40 10 20 10 40 …`（不是真实像素），**第二次**读才是
+  `00 01 89 01 66 01 4d …`。第一次读发生在 `get FDT average data`，
+  第二次发生在 check_finger_up 的失败尾巴里。不要拿第一次的数据判断画质。
+* 设备上 `0x0220 → 0x0c68`、`0x0236 → 0xc7`、`0x0238 → 0xc6`、
+  `0x023a → 0xc6`：DAC 校验用 `[0x2ab324+0xe4]=0xc6` 与读回值比对，
+  在真机上**是通过的**（离线回放曾经误报 dac error，因为回放按序号对齐，
+  请求 `f0 02 20` 拿到了录制里 `f0 00 a2` 的应答——回放工具的这个偏差要记住）。
