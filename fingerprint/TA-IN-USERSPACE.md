@@ -153,6 +153,38 @@ ut_pf_fp_init() -> 0, 0 spi transactions
 **验证标准**：`ut_pf_fp_init` 返回 0，并且 `ut_pf_log_msg` 里出现
 `[gf_ta_chip_series][…] CHIP_TYPE=…`（TA 自己打印的芯片型号）。
 
+### M1.5 已经打通 `ut_pf_fp_invoke_command`（2026-11-08）
+
+调用约定（从 `ut_pf_fp_invoke_command` 的反汇编推出来，并用实测验证）：
+
+```c
+long ut_pf_fp_invoke_command(uint32_t *desc, uint32_t *cmd, uint32_t *origin);
+/*                                 r0           r1          r2      */
+/*  r0 -> { u32 module; u32 ?; u32 subcmd; u32 status; u32 size; ... }
+ *  r1 -> 传输层命令号（1000 = 特殊路径，读码时先命中它）
+ *  r2 -> origin（TA 不写它）
+ */
+```
+
+实测：
+
+```
+[ta] init -> 0
+mod=0 sub=0 -> 0        (desc 没被改，没触发 SPI)
+mod=0 sub=1 -> [cp] open(0xffddfdec, 0x7, 0x7004)   <-- 然后进程死在这
+```
+
+这个 `module/subcmd` 的 16 字节描述符和 xaga 那边
+`docs/hal-protocol.md` 记的 `{u32 module; u32 subcmd; u32 status; u32 size}`
+是**同一个东西**——Goodix 的 HAL 只是把同样的框架换了个名字
+（`libgf_hal.so` 里的 `hal_milan_an_series_*`）。所以那一整套 module/subcmd
+表可以照抄结构，只需要从 `libgf_hal.so` 里把 Goodix 的具体编号读出来。
+
+**当前卡点**：`ut_pf_cp_open(algo=0x7, …)` —— 加密 provider 的 stub 语义。
+现在还只是"打日志返回 0"，TA 拿到假的结果之后就挂了。和 `ut_pf_ts_cp_*`
+一样，需要按调用点把参数含义弄清楚（大概率是 `TEE_ALG_*` 算法号 + key +
+keylen），再把 `ut_pf_cp_mc_*`（memcrypto）实现成真正的 AES。
+
 ### M2 SPI 桥 + 第一条真实命令
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
