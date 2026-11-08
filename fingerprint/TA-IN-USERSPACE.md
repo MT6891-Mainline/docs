@@ -498,6 +498,41 @@ compat 也修好了）。TA 连续调用时会缓存状态、不再发 SPI，所
 
 拿到那一位之后，在 `ta_host32` 里用现成的 `--spoof` 精确篡改即可，工具已经就绪。
 
+
+### M1.15 反汇编进展：定位到日志封装，剩下一个对齐问题（2026-11-08）
+
+用 capstone 之前先做了件更省事的事：在 `ut_pf_log_msg` stub 里读
+`__builtin_return_address(0)`，直接拿到"谁在打这条日志"：
+
+```
+[ta ra=0xa2f8] [GF_TA][E][gf_milan][milan_check_finger_up] finger is not leave, i=0
+```
+
+`0xa2f8` 在 TA 的日志封装里（`0xa29c` 起，负责 push 变参 + `vsnprintf`）。
+所以判断代码是**调用这个封装的那一层**。用字节模式扫描（`ta_refs3.py` 里那套）
+找到该封装有 **171 个 ARM 调用点**。
+
+同时扫"哪段代码里出现立即数 `0x58`"（`ta_reg58.py`），得到 17 个 Thumb 候选，
+其中 `0xb05c`、`0xbdb0`、`0xc4f8`、`0xd28c`、`0xddd8`、`0x11c14` 落在代码段里，
+且集中在日志封装附近——**`milan_check_finger_up` 大概率就在 0xb000-0xe000 这一带**。
+
+### 卡点：objdump 在 Thumb-2 上会解同步
+
+`arm-none-eabi-objdump -M force-thumb --start-address=0xbdb0` 出来的结果明显错位
+（`movs r0,#0x58` 后面跟着半个 32 位指令）。Thumb-2 是变长编码，**必须从真正的
+指令边界开始线性扫描**，否则一路错到底。这就是为什么前面几次"盲读"都读到垃圾。
+
+**下一步（工具已就绪）**：用 capstone 写递归下降（从已知边界 `0xa29c` 开始，
+或从每个 `push {..., lr}` 前导开始），重建 0xa000-0xe000 这一段正确的指令流，
+再找 `cmp/tst` + 分支。这一步纯离线，不需要设备。
+
+### capstone 安装方式（家目录只读）
+
+```sh
+pip install --target=/home/kily/project/mt6893/work/env/pylibs capstone
+PYTHONPATH=/home/kily/project/mt6893/work/env/pylibs python3 ...
+```
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
