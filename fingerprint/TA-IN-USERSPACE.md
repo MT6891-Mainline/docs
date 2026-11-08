@@ -383,6 +383,51 @@ INIT 期间的 TA 自检日志：
 `desc` 是 8 个 0。需要从 `libgf_hal.so` 的 `gf_hal_common_camera_capture`
 （0x20800）往上追它怎么准备 buffer，把布局照抄过来。
 
+
+### M1.12 图像尺寸与采集前的"手指状态"门（2026-11-08）
+
+TA 自己报出了图像几何：
+
+```
+[gf_algo][gf_algo_get_ee_image_info] image extension row = 44, col = 160
+```
+
+即 **160 列 × 44 行**（另有 44 行扩展），和 GF3626 侧边条状传感器的形状吻合。
+
+采集链路现在卡在 `milan_check_finger_up`：
+
+```
+[gf_milan][milan_check_finger_up] finger is not leave, i=0
+→ GF_ERROR_FINGER_NOT_LEAVE (1065)
+```
+
+**已排除的假设**（都是实测）：
+
+| 假设 | 实验 | 结果 |
+| --- | --- | --- |
+| 是物理状态（手指压着） | 按住 / 拿开各跑一次 | 两种都报同样错误 → 不是物理状态 |
+| 状态位在寄存器 0x0058 | 逐字节 / 逐位 spoof | 全零会让 DAC 校验先失败；其余组合仍是 finger not leave |
+| 状态位在寄存器 0x00a2（24 字节 delta） | 全零 spoof | 无效 |
+| 是 SPI 时钟不对（TA 按 desc 在 1 MHz / 6 MHz 间切换，我们一直用 1 MHz） | 按 `desc[0]` 反算并下发 speed_hz | 已实现，仍报同样错误 |
+
+顺带做完的基础设施（都在 `ta_host32` 里）：
+
+* `--spoof <addr> <val> [idx] [spoof16]`：按寄存器地址篡改返回值，用来做位级实验；
+* 分配器埋点：记录 TA 的 `malloc/free/realloc`，列出 >=1 KiB 的缓冲区并落盘；
+* 大读钩子：任何 `txlen > 64` 的读都会追加写入 `/root/ta/read_<addr>_<len>.bin`
+  （= 传感器的原始像素流，等采集走通就能直接拿到图）。
+
+### 下一步：把 IRQ 接进采集循环
+
+HAL 的做法是：`camera_capture` → 若 `FINGER_NOT_LEAVE` 则**等中断**再重试。
+我们目前完全没碰中断（内核驱动的 `IRQ_ENABLE` / `IRQ_WAIT` ioctl 已经可用，
+compat 也修好了）。TA 连续调用时会缓存状态、不再发 SPI，所以光重试没用——
+需要：
+
+1. `ioctl(IRQ_ENABLE)` → `ioctl(IRQ_WAIT)` 等一次手指沿；
+2. 再调 `camera_capture`，看状态是否翻转；
+3. 若翻转，说明这条路对，把"等中断 → 采集 → 取图"做成循环。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
