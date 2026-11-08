@@ -735,3 +735,49 @@ dtc -I dtb -O dts build/chopin/arch/arm64/kernel/chopin-board.dtb | \
 2. **背光与电源**：LM36273（ti-lmu/LM36274 复用）+ WL2866D2，让面板能自己上电/休眠。
 3. **IOMMU/SMI**：接主线 `mt6893-iommu-mm` + `mt6893-smi-larb`，把 `iommus` 变成真的。
 4. **显示子系统的其它部分**：双 pipe（1080 宽拆 540+540，和 LK 一样）、DP/DP_INTF。
+
+---
+
+## 附录：开机时 logo 上面压着的横向绿/黄彩条（v207 修复）
+
+### 现象
+
+开机 logo（`mi` + "Powered by android"）出现后、桌面/锁屏起来之前，屏幕**顶部约三分之一**叠着横向的绿色和黄色条带。看起来像早期 bring-up 的"彩条自检"还在跑。
+
+### 排查结论：没有任何驱动在画它
+
+| 查过的地方 | 结果 |
+| --- | --- |
+| 仓库里搜 `0xff0000` / 彩条绘制 | 只有 `fbpaint`（initramfs 里的**手动**命令，启动流程不调用） |
+| 设备全盘搜 `fbpaint`、`/dev/fb0`、splash 脚本 | 没有 |
+| `mediatek_v2` DRM 驱动、DTS | 没有 test pattern |
+| `recovery/`（LVGL） | 只有进度条，无彩条 |
+
+### 真正原因：fbdev 的扫描缓冲是**未初始化内存**
+
+`mediatek_v2` 通过 DRM 核心的 `drm_fbdev_dma_setup()` 建立 fbdev（`/proc/fb` =
+`0 mediatekdrmfb`），其扫描缓冲由 `drm_gem_dma_create()` 分配，**不清零**；而
+`fbcon` 并没有绑到这个 fb 上（日志里没有 `Console: switching to colour frame
+buffer device`），所以从 fbdev 注册那一刻起，面板扫出的就是**分配器返回的旧内存**。
+
+分配器把那批物理页（LK 之前用过的）给了内核，于是缓冲里还残留着 **LK 的启动
+logo**，顶部的若干行则是别的残留数据 —— 两者叠在一起，就成了"logo 上压彩条"。
+这也解释了为什么颜色恰好和 `fbpaint` 的 6 色一致：都是同一类旧帧缓冲内容。
+
+### 修复（内核 `f1c79a7`，`fp` 分支的基线）
+
+```c
+/* drivers/gpu/drm/drm_fbdev_dma.c, drm_fbdev_dma_driver_fbdev_probe_tail() */
+info->fix.smem_len = info->screen_size;
+
++	if (info->screen_buffer && info->screen_size)
++		memset(info->screen_buffer, 0, info->screen_size);
+```
+
+清零后，那段窗口从"logo + 彩条"变成**纯黑**，合成器起来后一切正常。
+实测（v207）：用户确认彩条不再出现。
+
+> 注意：厂商自己的 `mediatek_v2/mtk_drm_fbdev.c` 里有几乎相同的 `mtk_fbdev_probe()`，
+> 但 **`mediatek_v2/Makefile` 并不编译它**（只编 `mtk_drm_fb.o` / `mtk_drm_fbconsole.o`），
+> 所以补丁打在厂商文件里是死代码——第一版就踩了这个坑，最后落在 DRM 核心的
+> `drm_fbdev_dma.c` 才生效。
