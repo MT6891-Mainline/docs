@@ -349,6 +349,40 @@ memmgr 配置仍然缺失，TA 在拿到大小为 0 的对象后大概率解引�
 下一步：给 `gf_memmgr_config.so` 造一份最小合法内容，或者把
 `ut_pf_ts_cp_*` 的 create 路径补完（TA 用 `flags` 区分创建/打开）。
 
+
+### M1.11 ✅ DETECT + INIT + CAPTURE 全部返回 0（2026-11-08）
+
+```
+@@ t=0 s=1 cmd=1000 -> 0  spi=578     DETECT_SENSOR
+@@ t=1 s=1 cmd=1001 -> 0  spi=1190    INIT（含 OTP 校验）
+@@ t=0 s=1 cmd=1021 -> 0  spi=1214    CAMERA_CAPTURE
+```
+
+INIT 期间的 TA 自检日志：
+
+```
+[gf_secure_object] so(gf_otp_info.so) not exist        ← 只是缺备份，可忽略
+[milan_otp_check] chicago_hu_check_cp_info] OTP cp crc check success
+[milan_otp_check] chicago_hu_check_ft_info] OTP ft crc check success
+```
+
+**出厂 OTP 校准数据的 CRC 校验通过** —— 说明 TA 真的把传感器完整驱动起来了，
+读到的是有效校准数据，不是空转。
+
+修掉的两个 host 侧问题：
+
+1. **argv 被 TA 踩坏**：TA 跑在我们的栈上，深调用链会覆盖 `argv`，循环里第二
+   次 `strtoul(argv[6])` 就拿到 `0x1` → 崩在 musl `strtox`。改成**先把参数
+   全部解析进堆数组**再调用 TA。
+2. **不能走 musl 的 exit 路径**：TA 会注册自己的 exit/atexit 状态，正常
+   `return` 会跳到 `0x2`（SIGBUS）。改成 `fflush(); _exit(0);`。
+
+### 下一个卡点：图像数据还没取出来
+
+`CAMERA_CAPTURE` 返回 0，但图像输出到 TA 期望的 in/out 缓冲区里，而我们传的
+`desc` 是 8 个 0。需要从 `libgf_hal.so` 的 `gf_hal_common_camera_capture`
+（0x20800）往上追它怎么准备 buffer，把布局照抄过来。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
