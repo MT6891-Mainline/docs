@@ -1559,3 +1559,57 @@ capture 也就会继续走到读 `0xAAAA` 那一帧（27,365 字节）——这�
 `ENROLL` 的校准路径里（那里读到了完整的 27,365 字节帧），把那条调用链
 （`gf_algo_get_ee_image_info` → … → `0x25b18`）和 capture 的调用链对比一下就能
 找到差异。
+
+### M1.50 图像通道：数据是噪声，且模式分派已解到"mode 1 的 handler"
+
+**识图结论（关键）**：把 `0xAAAA` 读回的 27,365 字节按 160×88（8 位）和
+160×114（12 位打包）两种几何还原成 PNG 看，都是**均匀雪花/随机条纹**，
+没有任何脊线结构。统计上也吻合：字节近乎均匀分布（mean≈120–136、210+ 个
+不同值、几乎没有 0），整段 512 字节分块统计无衰减（不是 FIFO 溢出）。
+
+对照：`0x00a2`（FDT，12 区域）是**真实模拟量**且随按压大幅变化。
+结论：**总线本身没问题，是传感器在那次传输里没有驱动 MISO**（浮空噪声）。
+因此之前当成"基线图"的 27 KB 其实也是噪声——这也解释了
+`base_update_all` 为什么老是误判手指。
+
+**模式分派（已解）**
+
+```asm
+gf_hw_set_mode   0x2bd3c   push {r4,r5,r6,r7,lr}
+  0x2bd5c  cmp mode, #0x10 ; bls 0x2bde2      ; 模式空间 0..0x10
+  0x2bde2  ...
+  0x2be10  cmp mode, #8    ; bls 0x2be9a      ; 0..8 走跳表
+  0x2be9a  ldr r3,=0x1001b4 ; ldr r0,[r3, mode*4] ; mov pc, r0   ; 跳表
+```
+
+跳表 `0x1001b4`：
+
+| mode | handler | 用途（推断） |
+| --- | --- | --- |
+| 0, 1, 3, 4 | `0x2bed4` | idle / image / ... |
+| 2 | `0x2bf34` | |
+| 5 | `0x2becc` | |
+| 6, 7 | `0x2bea2` | |
+| 8 | `0x2bf2c` | |
+
+`capture(1021)` 传的是 **mode = 1** → handler `0x2bed4`。handler 内部：
+`blx` 两个 helper 得到 `fp`，然后 `fp==0` → `0x2bf44`、`fp==特定值` → `0x2c240`、
+否则 `[r6+0x68]=1` 并继续（mode==3 → `0x2c18c`；mode==0 → `0x2befe`；
+**mode==1 → `0x2c19c`**）。
+
+**下一步**：读 `0x2c19c` 起的 mode-1 分支，看它在读 `0xAAAA` 之前写了什么
+（启动转换）以及是否轮询就绪位。这是"图像通道悬空"最可能的答案所在。
+
+### M1.51 本阶段可用的工具一览（都在 port/fingerprint/ta32）
+
+| 工具/开关 | 作用 |
+| --- | --- |
+| `GF_BKPT=<addr>[,..]` | 在 TA 地址写 `bkpt`，命中时打印 **caller lr** 并恢复继续（已修 I-cache 刷新，一次命中） |
+| `GF_SPI_DELAY_US`（默认 2000） | 传输间隙；<1000 时 FDT 只回来 3/5 个样本 |
+| `GF_SPI_SPEED_HZ` | 强制 SPI 时钟 |
+| `GF_SPI_LOG=1` | 逐条 SPI 日志（**默认关**，开着会改变传感器行为） |
+| `frame_N.bin` | 每次 >1000 字节的读自动落盘到 `/root/ta/` |
+| `GF_POKE`/`GF_POKE_ONLY`/`GF_POKE_AFTER` | 写 TA 数据字；`_ONLY` 限定命令，`_AFTER` 只在该命令后写一次 |
+| `GF_DUMP3=<addr>:<len>` | 每条命令后 dump TA 内存 |
+| `fpread [noreset]` | 绕过 TA 直接读传感器（判断"硬件好不好"） |
+| `replay.sh` + `ta_xrun.py` + `ta_at.py` | 离线回放 / 轨迹注解 / 反汇编 |
