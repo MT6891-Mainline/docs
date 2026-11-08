@@ -534,6 +534,59 @@ v192：`out-scp-v192-sensor/boot-stockdt.img`（md5 `4f66941e8e0ea1205db89d00170
 持续生效。试错性质的配置必须在同一次会话里恢复，或者记录到文档里。这次
 `MTK_SENSORHUB` 就是从 v189 一直漏到 v191。
 
+
+## 设备唯一值清理（2026-11-08，开源前必须做）
+
+单文件 DTS 来自**运行中的 DTB**，因此带上了这台机器的实例标识。检查发现三处：
+
+| 位置 | 内容 | 性质 |
+| --- | --- | --- |
+| `/firmware/android/serialno` | `ib6dsk6pxofarglb` | **设备序列号** |
+| `bootargs` 里 `androidboot.serialno=` | 同上 | 同上 |
+| `bootargs` 里 `androidboot.chipid=` / `cpuid=` | `0xa4f8e0…` | **SoC 唯一 ID** |
+| `bootargs` 里 `androidboot.vbmeta.device=PARTUUID=` | `1f9b0939-…` | 分区表 UUID |
+| `/firmware/android/vbmeta.digest` | `0e522dae…` | 本机 vbmeta 摘要 |
+
+### 影响
+
+- **不会导致其他设备无法运行**：这些都是 Android 侧标识，Linux 启动不依赖它们。
+  内核实际 cmdline 来自 boot.img（`chopinport=…`），**DTS 里的 `bootargs`
+  根本没被使用**（已在设备上用 `/proc/cmdline` 验证）。
+- **但会泄漏并串号**：`/sys/firmware/devicetree/base/firmware/android/serialno`
+  对用户态可读。其他 chopin 设备刷这个内核后，会读到自己机器上**不属于它的
+  序列号**——既是隐私泄漏，也让依赖序列号的工具行为错乱。
+
+### 已清理（v193）
+
+删除：
+
+- `serialno` 属性（替换为注释）
+- `vbmeta.digest` / `vbmeta.size`
+- bootargs 里的 `androidboot.serialno` / `chipid` / `cpuid` / `vbmeta.device=PARTUUID`
+
+保留（板级/型号级，所有 chopin 相同）：
+
+- `panel_name=dsi_k10a_36_02_0a_dsc_vdo`
+- `androidboot.hwversion=1.9.0`
+- `androidboot.product.hardware.sku=chopin`
+- `WpAndMaxlum:0x7c,0x7d,0x56`（面板校准，同型号共用）
+- `ramoops.mem_address=…`（pstore 保留区）
+- 全部 mblock reserved-memory（LK 注入的 modem/GSP/display 区域，**不能删**）
+
+清理后 DTB：282,313 → **281,906 字节**（少 407 字节）。
+启动镜像：`out-scp-v193-clean/boot-stockdt.img`（md5 `6dc6fdbed1f516892b8e15914e5e04fe`）。
+
+### 开源前检查清单
+
+```sh
+grep -nE "serialno|chipid|cpuid|vbmeta\.digest|PARTUUID=" \
+     arch/arm64/boot/dts/mediatek/mt6893-xiaomi-chopin.dts
+# 期望：只匹配到注释，没有真实值
+```
+
+同类风险还有（本机未出现，但他机可能需要的）：WiFi/BT 的 MAC、`/chosen/random-seed`、
+传感器校准数据。若未来从别处导入 DTS，同样要检查。
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
