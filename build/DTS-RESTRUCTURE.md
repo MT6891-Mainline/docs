@@ -738,6 +738,57 @@ DTB         281,602 字节（与转换前一致）
 
 这样板级文件只保留「覆盖」，SoC 定义完全在 `mt6893.dtsi` 里，和 mt6895 一致。
 
+
+## 板级改覆盖片段（2026-11-08，对齐 mt6895 风格）
+
+把板级从「完整节点定义」改成主线式的 `&label {}` 覆盖，**DTB 全程 281,602
+字节不变**（每组都编译验证）：
+
+| 覆盖块 | 移出内容 | 行数 |
+| --- | --- | --- |
+| `&pio` | 43 个 `pinctrl_state_*` 组 | 384 |
+| `&i2c0..13`（8 条总线） | 39 个器件节点 | — |
+| `&spi0/1/5` | 3 个器件节点 | — |
+| `&dsi0` | panel + ports | — |
+
+### 遇到的问题
+
+1. **`gpio@10005000` 不是引脚控制器**：它只有 7 行（`status = "disabled"`、
+   `mediatek,gpio`），真正的控制器是 `pio: pinctrl {`（无 `reg`，靠 `reg` 列表
+   里的 9 段地址工作）。第一次找错节点，DTB 少了 6KB
+2. **引脚状态是二级子节点**：`pinctrl_state_*` 组本身还有 `pins_*` 子节点，
+   直接按「二级子节点」搬移会连组一起丢掉
+
+正确的做法是**按整个组**（`pinctrl_state_*` 子树）搬移，保留组内层级和
+phandle。
+
+### 结果
+
+```
+mt6893.dtsi                6,235 行  （原 7,307，减少 1,072）
+mt6893-xiaomi-chopin.dts   3,555 行  （原 2,357，增加 1,198）
+板级 &label 覆盖块          14 个
+DTB                        281,602 字节（不变）
+```
+
+提交：
+
+```
+a42138cfc  move chopin pin states into a board &pio override
+7e6fab395  move chopin i2c devices into board overrides
+53588a7f8  move chopin spi devices and panel into board overrides
+```
+
+启动镜像：`out-scp-v196-overrides/boot-stockdt.img`
+（md5 `b45d188a6910ab7b33ff41accb17e780`）。
+
+### 还可以继续的
+
+- `&mmc0` / `&ufs` 的板级参数、`&gpu`、`&mfg` 等
+- 板级根节点里的厂商容器（`mt6360_pmu_dts`/`mt6360_pmic_dts`/`mt6360_ldo_dts`）
+  可以合并到 mainline 的 `&i2c5 { mt6360@34 { regulators {...} } }` 里
+- `mtk_lpm` / `mtk_lpm_sysram` 等厂商节点可以去掉（如果驱动不用）
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
