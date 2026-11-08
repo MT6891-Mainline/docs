@@ -623,6 +623,44 @@ log#55 caller=0x25d11 r5=0x0 r6=0x2ab324 [r6+fc]=0xa
 （不依赖手机、可以反复跑、可以下断点）。成本是写一个回放模式（约 50 行），
 收益是把"盲猜"变成"看"。
 
+
+### M1.18 ✅ 离线 qemu 回放环境建成（2026-11-08）
+
+这是本轮最有价值的产出：**整个 TA 流程现在可以在主机上离线跑，不需要手机**。
+
+三件事凑齐：
+
+1. `GF_RECORD=<file>` / `GF_REPLAY=<file>`：SPI stub 能录下/回放每次事务
+   （格式 `n <txhex> <rxhex>`，一次 `cap` 全流程 1214 行）。
+2. `qemu-arm -B 0x10000000`：主机的 `vm.mmap_min_addr = 65536`，TA 的
+   `0x8000` 基址直接 `mmap(MAP_FIXED)` 会 `EPERM`；用 `-B` 给 guest 加一个
+   基址偏移就绕过去了。
+3. `-d in_asm,cpu -one-insn-per-tb -dfilter <start>+<size> -D log`：
+   QEMU 10 的 `-dfilter` 语法是 `0x25c80+0xc0`（`-singlestep` 已改名
+   `-one-insn-per-tb`）。
+
+**验证**：回放跑出来的结果和真机逐字节一致（同样 `spi=1214`、同样 desc）。
+
+### 门处的权威寄存器值（qemu 实测）
+
+```
+0x25cd4: ldr r3, [r6, r4]   r6=0x2ab324 r4=0xfc → r3 = 0xa
+0x25cd6: cmp r5, r3         r5 = 0            → N=1 (0 < 10)
+0x25cd8: blo #0x25cfc       跳转成立
+```
+
+所以运行时 `r5 = 0`（就是日志里的 `i=0`），阈值 `[r6+0xfc] = 10`。
+我此前从十六进制手工推的 `r5 = 12` 是错的——那是同一条指令在另一条路径上的
+常量，静态读分支果然不可靠，**qemu 一跑就清楚了**。
+
+### 下一步（现在很快，因为不用手机）
+
+1. 在 qemu 里给 `0x25cd4` 附近的读值下断点式过滤，找到"传感器读回来的
+   `0x58` 值"被哪条指令消费；
+2. 用 qemu **暴力试值**：把 `0x58` 的返回值在 0..0xffff 里扫，看哪个值让
+   `finger is not leave` 消失（每次 1–2 秒，可以跑几百次）；
+3. 找到之后就知道真正的"手指离开"编码，再决定是改 stub 还是改采集配置。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
