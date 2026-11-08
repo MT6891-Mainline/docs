@@ -281,6 +281,45 @@ $ ta_host32 goodix.ta probe 1001 1 1
 **这一条特别值得记**：它是"用户态跑 32 位 TA"这条路线独有的一类坑——内核侧
 一切正常、协议也正常，只是 ABI 边界上少了一个回调。
 
+
+### M1.9 TA 已经能读到芯片 ID（2026-11-08）
+
+v203（`5b1be39`，`.compat_ioctl`）刷进去之后，SPI 立刻通了，而且暴露出
+TA 的**真实帧格式**：
+
+```
+[spi#1] tl=3 rl=0 n=3 tx=f0 00 00        -> 0    地址相
+[spi#2] tl=5 rl=0 n=5 tx=f1 ff ff ff ff  -> 0    数据相，rxlen=0
+```
+
+注意两点，都是反直觉的：
+
+1. **数据相 rxlen=0** —— TEE 的 SPI 服务是**原地返回**：收到的字节写回
+   `tx` 缓冲区，而不是写另一个 `rx` 指针。
+2. 传回来的 5 个字节是 `00 10 a0 00 25` —— 一个状态字节 + `10 a0 00 25`，
+   正是我们在内核侧读到的那个芯片 ID。去掉状态字节后原地回填，TA 拿到的
+   就是 `10 a0 00 25`。
+3. 返回值必须是 **0**（成功）。返回字节数会被当成错误
+   （`drSpiSend failed ret=0x3`）。
+
+### 现在的卡点：TA 认不出这颗芯片
+
+```
+[gf_milan][milan_init_configuration] unsupport sensor, chip id=0x00000000
+→ GF_ERROR_SENSOR_NOT_AVAILABLE (1062)
+```
+
+`DETECT_SENSOR` 那一步（`spi=2`）确实读到了 `10 a0 00 25`，但 detect 判定
+失败，所以后面的 `INIT` 拿到的是缓存里的 0。
+
+头号嫌疑是那条一直在刷的：
+`[gf_memmgr_manager][gf_memmgr_load_config] not found config file, so=gf_memmgr_config.so`
+
+这份 memmgr 配置（每个传感器的参数表）平时是 HAL 首次启动写进 TEE 存储的。
+没有它，TA 可能把所有传感器都判成 unsupported。下一步要么从
+`libgf_hal.so` 的 8 KiB 不透明表里把它挖出来，要么改 `ut_pf_ts_cp_open`
+让 TA 走"首次自建"路径。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
