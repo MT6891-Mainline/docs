@@ -320,6 +320,35 @@ TA 的**真实帧格式**：
 `libgf_hal.so` 的 8 KiB 不透明表里把它挖出来，要么改 `ut_pf_ts_cp_open`
 让 TA 走"首次自建"路径。
 
+
+### M1.10 ✅ TA 把传感器配置起来了（2026-11-08）
+
+关键发现：**TEE 的 SPI 服务是全双工、按 `txlen` 传输，收到的字节写回 `rx` 指针**
+（`rxlen` 一直是 0，`desc` 里是时钟配置 `{high,low,...}`，不是长度）。
+
+改成把收到的字节填进 `rx` 之后，`DETECT_SENSOR` 一路跑完：
+
+```
+@@ t=0 s=1 cmd=1000 -> 0   spi=578
+```
+
+578 次 SPI 事务，中间是 `f0 01 04 00 01 ff ff`（写 0x0104）、
+`f0 01 02 00 01 xx xx`（反复写 0x0102 + 读 0x0106 轮询）——**原厂 TA 正在
+给传感器下发配置并轮询它进入就绪状态**，而且没有再报错。
+
+同时修掉两个 stub 语义错误：
+* `ut_pf_ts_cp_size()` 返回的是**尺寸本身**，不是状态码。之前把 `0xFFFF0001`
+  当成错误码返回，TA 直接把它当成了文件大小（日志里 `size=4294901761`）。
+* 缺文件时返回 0 而不是负数。
+
+### 下一个卡点：`INIT`(1001) 段错误
+
+`DETECT` 成功后调 `INIT` 会 SEGV（exit 139，还没有 SPI 调用）。此时
+`gf_memmgr_load_config` 报 `config file object corrupt. size=0` ——
+memmgr 配置仍然缺失，TA 在拿到大小为 0 的对象后大概率解引用了空指针。
+下一步：给 `gf_memmgr_config.so` 造一份最小合法内容，或者把
+`ut_pf_ts_cp_*` 的 create 路径补完（TA 用 `flags` 区分创建/打开）。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
