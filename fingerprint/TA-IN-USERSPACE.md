@@ -1436,3 +1436,57 @@ hal_milan_an_series_init    → gf_hal_invoke_command(0x3e9, buf, 0x15c) 然后 
      capture 里复现；
   3. 也可以先做"认证/匹配"方向：`OPERATION_AUTHENTICATE_IMAGE` 可能比
      enroll 的会话更容易走通。
+
+### M1.47 ✅ capture 被丢弃的完整判据（读出来了）
+
+`gf_state_execute_operation(op, buf)` 在 `0xd5828`，判据是三层：
+
+```c
+cur = gf_state_get_current_operation();      // [0x205d38]
+if (f(cur) - f(op) < 0)   reject;            // 0xd5898 bmi 0xd58f0
+else if (h(cur) == 0)     reject;            // 0xd58a6 beq 0xd58da   ← 卡这里
+else if (j(op) == 0)      reject;            // 0xd58b8 bne 0xd5904
+else                      proceed → gf_state_common_execute(op, buf)  (0xd520d)
+```
+
+| 东西 | 地址 |
+| --- | --- |
+| `gf_state_execute_operation` | `0xd5828` |
+| `gf_state_get_current_operation` | `0xd51c4`（`return [0x205d38]`） |
+| `op → 优先级` 表（`f`） | 函数 `0xe2338`，表 `0x11ae60`，8 字节/项 |
+| `op → 模式` 表（`h`） | 函数 `0xe2344`，表 `0x11b12c`，4 字节/项（`op-5` 索引，`op<5` 返回 0） |
+| `op → 名称` 表 | 函数 `0x18389`，名字串在 `0xf9878` 起 |
+| 放行分支 | `0xd5904` → `blx 0xd520d` |
+
+实测表值：
+
+```
+f(0)=1  f(1)=1  f(2..3)=1  f(4)=0  f(5)=3  f(6)=0  f(7)=3  f(8)=3  f(9..15)=0
+h(5)=1  h(6)=0  h(7)=1  h(8)=1  h(其余)=0
+```
+
+`[0x205d38]` 的实际取值轨迹（真机 dump）：
+
+```
+DETECT 后 0x3c   INIT 后 0x3c   ALGO_INIT(1005) 后 0x09   PRE_ENROLL 后 0x09   ENROLL 后 0x00
+```
+
+**结论**：enroll 结束后 `cur = 0` → `h(0) = 0` → capture 直接走 `0xd58da`
+（只打日志返回，一个导入 stub 都不碰）。把 `[0x205d38]` poke 成
+`5`（`h=1`）之后，capture 变成**每轮稳定 `+20` 次 SPI**（= 读 FDT 基线），
+说明状态机这一关过了。
+
+还有一个坑：`GF_POKE_ONLY` 依赖 `g_cur_cmd`，而 `enroll` 模式原先没维护它，
+导致"设 operation"实际上被跳过、看起来像"poke 无效"。现在每个命令都会设。
+
+### 下一步（很近，但还差一步）
+
+`+20` 是 `milan_read_fdt_base`（写 cmd `0xC0`、读 `0x58`/`0xa2`、DAC 三连、
+写 273 字节配置），也就是"取一次基线"。真正的图像读是
+**寄存器 `0xAAAA`、27,365 字节**（校准阶段出现过一次）。所以剩下要做的是：
+
+1. 读 `0xd5904 → gf_state_common_execute(0xd520d)` 之后的流程，看它为什么在
+   "读基线"之后返回，而不是继续 `0xAAAA`；
+2. 大概率是"基线必须先在**无手指**时建立，之后检测到手指才读图"——也就是
+   capture 要按 `arm(无手指) → 等 IRQ → capture(有手指)` 的顺序，
+   而我们现在每轮都在 arm。
