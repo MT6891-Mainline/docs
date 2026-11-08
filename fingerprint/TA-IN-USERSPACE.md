@@ -1335,3 +1335,104 @@ hal_milan_an_series_init    → gf_hal_invoke_command(0x3e9, buf, 0x15c) 然后 
 | 每条命令之后看最后碰到的 stub | plan 输出里的 `last=` |
 | 崩溃时打印 TA 调用栈 | 自动（扫描栈上落在 TA 代码段的值） |
 | 加密上下文重复 close 保护 | 自动（`[cp] close: stray ctx ...`） |
+
+---
+
+## 2026-11-09 凌晨（第四轮）：三个硬件级 bug，第一次采到真图
+
+这一轮的结论全部在**真机**上验证过。三个 bug 之前一直互相掩盖，导致前面几轮
+的很多推论是建立在坏数据上的。
+
+### M1.42 ⭐ 传感器需要开机复位，否则 TA 读什么都是 0
+
+`ta_host32` 一直只是 `open("/dev/goodix_fp")` 就开始跑，而原厂 HAL 每次启动
+都会 `ioctl(GF_IOC_RESET)`。不复位的后果：
+
+```
+[spi#1] f0 00 00 → 00 00 00 00 00      (芯片 ID 全 0)
+→ DETECT 里 milan_check_finger_up 空指针崩溃
+   pc=0x25774  addr=0x210
+```
+
+写了一个不经过 TA 的探针 `fpread.c`（直接走 `/dev/goodix_fp` 的
+`GOODIX_FP_IOC_XFER`）来隔离问题：**复位后** `chip id = 00 10 a0 00 25`、
+`0x58 = 02` —— 传感器本身是好的。所以是"没复位"，不是"传感器坏了"。
+
+> `fpread` 的坑：`struct goodix_fp_xfer` 必须 `rx_len = tx_len` 且 `rx` 指向
+> 另一个缓冲区；`rx_len = 0` 时驱动什么都不回填（第一次写探针就被这个骗了，
+> 误以为传感器全 0）。
+>
+> 现在 `ta_host32` 默认在打开设备后复位一次（`GF_NO_RESET=1` 关闭），
+> 另外有 `./ta_host32 goodix.ta reset [次数]` 可以单独复位。
+
+### M1.43 ⭐⭐ `0xa2` 读回 `40 10 20…` 的真因：采样太早，不是 SPI 时序
+
+这是从 M1.24 一直悬着的问题。现在的解释是确定的：
+
+* TA 把地址相（`f0 00 a2`）和数据相（`f1 ff …`）拆成**两次传输**，各占一个
+  CS 窗口；273 字节配置写完之后传感器还在做 ADC 转换，立刻读回来的是
+  **移位寄存器里被挤出来的配置字节**（配置里就含 `…40 10 20 10…`，
+  所以读回是 `00 40 10 20 10 40 10 20 …`，周期正好 3）。
+* 加一个传输间隙就好了。实测阈值（同一份代码、同一台机器）：
+
+| `GF_SPI_DELAY_US` | `0x00a2` 读回 |
+| --- | --- |
+| 0 | `00 40 10 20 10 40 10 20 10 40`（配置残留） |
+| 500 / 600 / 800 | `00 00 00 …`（ADC 还没出数） |
+| **1000** | `00 01 8f 01 6c 01 51 01 45 …`（**真实 12 位采样**） |
+| 2000 | `00 01 8f 01 6c 01 50 01 45 …`（同上，每次略有漂移） |
+
+现在默认 1000 µs（`GF_SPI_DELAY_US=0` 关闭），代价是 init 从 1.2 s 变成
+约 2.5 s。
+
+**注意**：`milan_check_finger_up` 的判据是
+`down_i - delta_up >= avg_i` → 判"手指按着"。在坏数据下 12 个区域同时
+"按着"，于是门永远不过——这也解释了为什么之前所有"寄存器 spoof"都无效。
+
+### M1.44 `enroll` 模式漏了 `1005`
+
+`enroll` 只 prime 了 `1000`+`1001`，而 `max_fingers_per_user` 是 `1005`
+（算法初始化）设的，结果 enroll 被 `REACH_FINGERS_UPLIMIT (1005)` 拒掉。
+补上之后 `ENROLL` 真正做 `+20` 次 SPI 并返回 0。
+
+### M1.45 脏校准对象会让 capture 直接返回
+
+在坏数据时代写下的 `gf_fdt_base.so` 会被判无效：
+
+```
+[gf_base][base_check_fdt_base_validation] exit. err=GF_ERROR_INVALID_BASE, errno=1058
+```
+
+之后每次 `1021` 都是 `+0` 次 SPI（一个导入 stub 都不碰）。删掉
+`gf_fdt_base.so` / `gf_calibration.so` / `gf_nav_base.so` 让它重建才行。
+
+### M1.46 ⭐ 第一次采到真图
+
+清掉脏对象后跑一次 `enroll`，TA 在 `ENROLL` 内部自己做校准并**读了一帧**：
+
+```
+[spi#1248] tl=27365 rl=0 n=27365 desc=…00000007 00000007… f1 ff ff …
+           rx=00 75 1b 44 5b 69 75 85 f4 14 …
+[gf_cali_common][gf_cali_common_get_state] g_calibration_data.calibration_type=0
+```
+
+`00 75 1b 44 5b 69 75 85 f4 14…` 是典型的 12 位像素分布（值域宽、相邻不相关），
+和之前 `40 10 20` 那种周期垃圾完全不同。同时
+`gf_calibration.so`（23168 B）被写下。
+
+### 现在的状态与下一步
+
+* 链路：`复位 → DETECT(578) → INIT(1190) → ALGO_INIT(1279) → PRE_ENROLL →
+  ENROLL(+20，内部校准并读一帧 27365 B) → 每手指 CAPTURE → POST_ENROLL`。
+* **`CAPTURE(1021)` 在 enroll 会话里仍然是 `+0`**：数据已经没问题，但状态机
+  还是把它丢掉。已知 `gf_state_execute_operation(capture=11)` 会检查
+  `gf_state_get_current_operation()`（存在 `0x205d38`），把 operation poke 成
+  `OPERATION_ENROLL(0x31)` 后 capture 会去做 arm(+20)，但读图仍不发生。
+* 下一步建议：
+  1. 反 `gf_state_execute_operation` 里 capture 分支的完整条件
+     （`0xd5828` 起，比较 `0x35`/`0x3c` 之后走 `0xd520d`）；
+  2. 看 `gf_cali_*` 是怎么触发那帧 27365 B 的读的——沿着
+     `gf_algo_get_ee_image_info` 往上找"谁发起读图"，把那条路径在
+     capture 里复现；
+  3. 也可以先做"认证/匹配"方向：`OPERATION_AUTHENTICATE_IMAGE` 可能比
+     enroll 的会话更容易走通。
