@@ -533,6 +533,55 @@ pip install --target=/home/kily/project/mt6893/work/env/pylibs capstone
 PYTHONPATH=/home/kily/project/mt6893/work/env/pylibs python3 ...
 ```
 
+
+### M1.16 ✅ 找到 `milan_check_finger_up` 的确切代码（2026-11-08）
+
+静态分析在混合指令集上一直打滑，于是换成**动态 hook**：TA 里所有日志都走
+`0xa29c` 那个封装，我们把自己的 shim 写进它的第一条指令（ARM `b`，±32 MB），
+shim 里读 `__builtin_return_address(0)` —— 得到的就是"谁在打这条日志"。
+
+要打这个补丁，host 必须链接在 TA 的 ±32 MB 内，所以 `-Ttext` 从 `0x10000000`
+改成了 `0x800000`（TA 占 `0x8000–0x33c918`，不冲突）。
+
+然后两次运行按序号对齐日志和调用者：
+
+```
+log#55 caller=0x25d11 | [gf_milan][milan_check_finger_up] finger is not leave, i=0
+```
+
+`0x25d11` 是 Thumb 返回地址（`0x25d10 | 1`），落在 **Thumb 代码**里。手读十六进制：
+
+```
+25cd4: 33 59     ldr  r3, [r6, #0xfc]     ; 取一个运行时值
+25cd6: 9d 42     cmp  r5, r3
+25cd8: 10 d3     bcc  0x25cfc              ; r5 < r3 → 判为"手指没离开"
+25cda: 04 20     movs r0, #4               ; 否则只打一条 level-4 调试日志
+25cdc: 42 49     ldr  r1, [pc, #0x108]
+25cde: 42 46     mov  r2, r8
+25ce0: d0 47     blx  r10                  ; r10 = 日志函数
+25ce2: 08 b0     add  sp, #8
+...
+25cee: f0 bd     pop  {r4, r5, r6, r7, pc}
+```
+
+**这是数值比较，不是标志位** —— `r5` 和 `*(r6+0xfc)` 都是运行时算出来的量
+（大概率是图像/基线的某种统计值）。这解释了为什么按寄存器地址 spoof 全部无效：
+门读的不是某个状态位，而是它自己算出来的一个数。
+
+把 `0x25cd8` 的 `bcc` 改成 `nop`（`GF_PATCH_GATE=1`）能跳过这条分支，但返回码
+仍然由前面算好的值决定（`r0 = r9`），所以表现不变——说明**判定发生在更早的
+图像/统计计算里**。
+
+### 下一步
+
+1. 在 `0x25cd6` 处把 `r5` 和 `r3` 的值打出来（把 `cmp` 位置换成一次
+   `bl` 到 shim 需要 4 字节，可以先把 `0x25cd4` 的两条 2 字节指令合并腾挪，
+   或者改 hook `gf_milan_reg_access` 并解析它返回的结构）。
+2. 更省事的办法：hook **图像读取函数**，把它读到的缓冲区和基线都 dump 出来，
+   直接看 TA 算出来的 delta 是多少——如果 delta 极大（比如 0x40/0x20 那种
+   规律性数据），说明**传感器返回的"图像"本来就不对**，问题在采集配置，
+   不在判断逻辑。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
