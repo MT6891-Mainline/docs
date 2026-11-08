@@ -185,7 +185,44 @@ mod=0 sub=1 -> [cp] open(0xffddfdec, 0x7, 0x7004)   <-- 然后进程死在这
 一样，需要按调用点把参数含义弄清楚（大概率是 `TEE_ALG_*` 算法号 + key +
 keylen），再把 `ut_pf_cp_mc_*`（memcrypto）实现成真正的 AES。
 
-### M2 SPI 桥 + 第一条真实命令
+
+### M1.6 SPI 桥通了（2026-11-08）
+
+把 `ut_pf_cp_*` 换成 xaga 那边验证过的语义（`open` 返回上下文指针、
+`mc_finish` 吐确定性 32 字节 key、`sc_*` 直通）之后，TA 不再挂，整轮 sweep
+跑完。**TA 已经开始真的跟传感器说话了**：
+
+```
+mod=0 sub=0 -> 0 spi=0
+[spi#1] txlen=3 rxlen=0 tx=f0 00 00   ← 就是我们的地址相，读 0x0000
+mod=0 sub=1 -> 0 spi=1
+mod=0 sub=2 -> [gf_ta_test_chip_series] invalid parameters. cmd_id=GF_CMD_DETECT_SENSOR, cmd_id_code=1000
+mod=0 sub=3 -> [gf_ta_dump] invalid parameters cmd_id=GF_CMD_DETECT_SENSOR
+```
+
+### 命令描述符的真实语义
+
+| 字段 | 含义 |
+| --- | --- |
+| `desc[0]` | module（0..2 都进同一族，暂时没看出区别）|
+| `desc[2]` | **入口族**：0/1 = 正常路径，2 = `gf_ta_test_*`，3 = `gf_ta_dump_*` |
+| `*cmd` | **GF_CMD_* 命令号**，`1000 = GF_CMD_DETECT_SENSOR` |
+
+`desc[2]` 这条路是**有状态的**：先调一次全零描述符（正常路径，会做一次 SPI
+读芯片）之后，后续调用才会被路由到同一族；单独直接打 `sub=2` 会落到
+`gf_ta_user_cmd_entry_point` 报 `GF_ERROR_BAD_PARAMS`。所以"盲扫"不可靠，
+下一步要按 HAL 的真实调用序列走。
+
+### 下一步（明确）
+
+1. 从 `libgf_hal.so` 的 `hal_milan_an_series_*`（debugdata 里带**地址**：
+   `hal_milan_an_series_init=0x416a8`、`enroll=0x41ce0` …）反出每个命令的
+   `{module, sub, GF_CMD}` 三元组和调用顺序。反汇编已经验证可用。
+2. 用 TA 自己的错误日志当"枚举器"（它会把 `cmd_id` 名字打出来），但必须在
+   正确的前置状态下调。
+3. 抓 `CAMERA_CAPTURE` 的 SPI 流量，确认帧格式和我们内核侧一致，再看画质。
+
+### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
    （buffer/长度/读回，需从调用点确认）。
