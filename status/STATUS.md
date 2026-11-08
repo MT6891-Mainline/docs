@@ -1,21 +1,22 @@
 # chopin (Redmi Note 10 Pro / MT6891) 主线 Linux 移植 —— 当前状态
 
-> 最后更新：2026-11-07
-> 镜像：`out-scp-v187-rootfs/boot-stockdt.img`
-> 内核：`7.3.0`，分支 `7.3.0-mt6891-xiaomi-chopin`，构建号 `#197`+
+> 最后更新：2026-11-08
+> 镜像：`out-scp-v199-733-final/boot-stockdt.img`
+> 内核：`7.3.3`，树 `git/chopin-linux-7.3`（18 个按子系统的提交）
 
 ## 1. 能用什么
 
 | 功能 | 状态 | 备注 |
 | --- | --- | --- |
 | 启动 | ✅ | preloader → LK → GenieZone → Linux，无 U-Boot/UEFI |
-| 显示 | ✅ | 厂商 `mediatek_v2` DRM，1080x2400 |
+| 显示 | ✅ | **主线 `mediatek-drm`**，1080x2400；厂商 V2 仅编译不绑定 |
 | 触摸 | ✅ | |
 | 桌面 | ✅ | **Denial**（v0.6.2，tty1 自动登录 `kily` 后 `denial-session`） |
 | Droidloom（安卓应用） | ❌ | cell 能启动到 zygote，SurfaceFlinger 因 EGL/ANGLE 崩溃循环；见 [`desktop/DROIDLOOM.md`](../desktop/DROIDLOOM.md) |
 | 硬件渲染 | ✅ | panfrost (Mali-G77)，**810 MHz** |
 | 音频 | ✅ | `mt6893mt6359` 声卡 |
 | WiFi / 蓝牙 | ✅ | |
+| 摄像头 | ❌ | 完全未移植 |
 | 加速度计 | ✅ | SCP RV33 + 自建 iio-sensor-proxy，自动旋转可用 |
 | 自动旋转 | ✅ | |
 | **电量显示** | ✅ | BQ27Z561 真库仑计（±1%） |

@@ -13,6 +13,9 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 ---
 
 | [power/CHARGING-STATUS.md](power/CHARGING-STATUS.md) | 电池与充电的移植状态：能用的部分、三个缺口、彻底清理的步骤 |
+> **新会话从这里开始**：[`HANDOFF-2026-11-08.md`](HANDOFF-2026-11-08.md)
+> 当前状态、这期间的变化、未完成的工作、重要约定
+
 ## 从哪开始
 
 | 想知道什么 | 读这个 |
