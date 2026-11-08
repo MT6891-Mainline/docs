@@ -116,24 +116,36 @@ poweroff 之前**。需要 `journalctl -b -1` 确认关机序列的最后一步�
 * 或者"卡住"的其实是 §4.1 的重启（会话被 logind 干掉），而不是 autologin 失败；
 * 或者 denial 自身的 PAM `setuid failed`（kily 非 root）导致会话失败 → 走了重启路径。
 
-## 4.4 ⭐ 补充观察（用户 2026-11-08 补充）：**开机和关机都要求插着 USB**
+## 4.4 ⭐ 补充观察（用户 2026-11-08 修正）：**只有开机要求 USB，关机/重启不需要**
 
-原话：「只要开机连接 USB，关机也有连接 USB」。
+最初的说法是"开机和关机都要求插 USB"，用户随后修正：
 
-这把范围从"启动链"扩到了**关机链**，而两条链共有的东西很少：
+> 不插 USB 也能正常关机/重启，**只有开机**需要插着 USB。
 
-* `mtu3` / USB gadget（`usb-gadget.target`）
-* `serial-getty@ttyGS0`（现在是 `bash -l`）
-* systemd 的 shutdown 事务里与这些 unit 相关的 stop 顺序
+这条修正很重要，它把范围**收窄回启动链**，并且说明：
 
-两种可能，需要一次实验区分：
+* 关机路径（systemd shutdown 事务、`serial-getty@ttyGS0` 的 stop、gadget 的拆除）
+  **没有**依赖 USB —— 所以不是"关机事务里某个 unit 卡住"；
+* 开机路径里**只有一处**受 USB 插入影响的东西值得怀疑：
 
-| 可能 | 表现 | 验证 |
-| --- | --- | --- |
-| **A. 关机时挂住**（systemd 等某个 unit 超时，最终没 poweroff） | 不插 USB 关机后设备黑屏但没真正断电／过一会自己重启 | 不插 USB 执行关机 → 冷启动 → 读 `journalctl -b -1` 的关机序列 |
-| **B. 关机由用户态发起（denial → logind PowerOff），而这条路径依赖 USB** | 关机按钮无反应／重启而不是关机 | `busctl monitor org.freedesktop.login1` 挂着再关机，看有没有 Reboot/PowerOff 请求 |
+| 候选 | 为什么可疑 |
+| --- | --- |
+| `mtu3`（`dr_mode: 3, drd: auto`） | 双角色控制器，插不插线决定 role/枚举，probe 行为可能不同 |
+| `mt6360-tcpc`（`Failed to register tcpci port`，每次 boot 都有） | Type-C 端口控制器注册失败，插线/离线走的分支不同 |
+| `usb-gadget.target` / `serial-getty@ttyGS0` | 只有插线时 gadget 才真正 enumerating |
 
-建议先做 A：**不插 USB 关机 → 插 USB 开机 → 读上一次 boot 的日志**，直接看关机卡在哪一步。
+**待验证**：不插 USB 冷启动，卡住时若能 SSH 进去（WiFi 常仍在），抓：
+
+```sh
+systemctl list-jobs                        # 有没有卡住的任务
+systemctl is-active usb-gadget.target
+dmesg | grep -iE "mtu3|tcpc|gadget|udc"
+pgrep -a agetty; grep FLOCK /proc/locks    # 再确认一次不是锁争用
+journalctl -b -p warning | tail -20
+```
+
+若 SSH 进不去（用户态已停），则改为：**不插 USB 开机 → 等到卡住 → 插 USB 让它起来 →
+`journalctl -b` 看这次 boot 里在插线之前发生了什么**（日志是同一 boot 的，能追溯）。
 
 ## 5. 下次现场如何取证（重要）
 
