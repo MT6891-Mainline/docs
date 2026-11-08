@@ -667,6 +667,77 @@ DTB 缩小 76 字节、反编译 diff 3,715 行，但**差异来自节点顺序�
 - SoC dtsi 里的厂商 binding 节点（`mediatek,mfb`、`mediatek,venc_gcon` 等）
   要等对应驱动移植后再改
 
+
+## label 化完成（2026-11-08）
+
+两步做完，**DTB 全程保持不变**（281,602 字节）：
+
+### 1. `__symbols__` → 真 label
+
+板级 dts 里原本有一个 `__symbols__` 节点（492 条 `label = "/path"`，是反编译
+时从 DTB 带回来的）。把它删除，按路径把标签写到对应节点上：
+
+```
+485 个节点拿到 label（491 个路径里 6 个无标签）
+```
+
+`-@` 编译时 dtc 会自动重新生成 `__symbols__`，内容一致。
+
+### 2. 数字 phandle → `&label`
+
+按属性白名单 + provider 的 `#*-cells` 精确消费 cells：
+
+| 属性 | cells 来源 |
+| --- | --- |
+| `clocks` | provider 的 `#clock-cells` |
+| `power-domains` | `#power-domain-cells` |
+| `iommus` | `#iommu-cells` |
+| `resets` | `#reset-cells` |
+| `mboxes` / `dmas` / `pwms` | 各自的 `#*-cells` |
+| `interrupt-parent`、`*-supply`、`phys`、`memory-region`、`remote-endpoint`、`extcon`、`usb-role-switch`、`thermal-sensors`、`sound-dai` | 0（单 phandle） |
+| `*-gpios` | `#gpio-cells` |
+
+结果：
+
+```
+转换属性   1,013 处
+&label 引用 343 处
+残留数字     3 处（3 个 provider 自身没有 label）
+DTB         281,602 字节（与转换前一致）
+```
+
+### 遇到的坑
+
+1. `#address-cells = <0x01>` 被误转换——正则没排除 `#` 开头的属性，加
+   `(?<![#\w-])` 负向后视解决
+2. 属性值没有匹配到 label 时直接返回了裸值（`phandle = 0x0b;`），丢掉尖括号
+   → 必须返回 `<原始值>`
+
+### 提交
+
+```
+852d97c41  arm64: dts: mediatek: use labels instead of numeric phandles on chopin
+```
+
+启动镜像：`out-scp-v195-labels/boot-stockdt.img`（md5 `78da811250fd2dd95ac77e31f4d86a75`）。
+
+### 剩下的一步
+
+板级还在用**完整节点定义**携带引脚状态和 i2c 器件，下一步可以改成主线风格的
+覆盖片段：
+
+```dts
+&pio {
+	pins_...: ... { ... };
+};
+
+&i2c0 {
+	touchscreen@5d { ... };
+};
+```
+
+这样板级文件只保留「覆盖」，SoC 定义完全在 `mt6893.dtsi` 里，和 mt6895 一致。
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
