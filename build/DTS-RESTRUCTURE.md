@@ -587,6 +587,45 @@ grep -nE "serialno|chipid|cpuid|vbmeta\.digest|PARTUUID=" \
 同类风险还有（本机未出现，但他机可能需要的）：WiFi/BT 的 MAC、`/chosen/random-seed`、
 传感器校准数据。若未来从别处导入 DTS，同样要检查。
 
+
+## 完成：单文件 DTS，切片全部移除（2026-11-08）
+
+验证过没有任何 `#include` 引用后，删除了全部死文件：
+
+```
+删除 33 个文件：
+  mt6893-xiaomi-chopin-*.dtsi        30 个切片
+  mt6893-xiaomi-chopin-androidbase.dts  （厂商完整 DTS 参考副本）
+  mt6893.dtsi                            （只被死切片引用）
+  mt6893-pinfunc.h                       （DTS 不用 PIN() 宏）
+
+arch/arm64/boot/dts/mediatek/ 现在只剩：
+  mt6893-xiaomi-chopin.dts    10,770 行
+```
+
+提交：
+
+- `3d77d2177` arm64: dts: mediatek: keep chopin as one self-contained board tree
+  （33 files changed, 10,750 insertions, 24,248 deletions）
+- `e17cf6e64` arm64: dts: mediatek: drop the unused mt6893 pinfunc header
+
+构建验证：
+
+```
+make dtbs               0 errors
+DTB                     281,906 字节
+kernel embedded FDT     281,906 字节
+```
+
+`chopin-dtb.S` 嵌入的是构建后的 `arch/arm64/kernel/chopin-board.dtb`，
+与这些源文件无直接引用关系，删除切片不影响它。
+
+### 为什么之前不能删
+
+切片之间是**任意位置切断**的（一个文件以未闭合的 `mfb@15812000 {` 结尾，
+下一个文件接着它的属性），`mt6893.dtsi` 又是被这些切片 include 的。只要还有
+一个切片在编译，删任何别的文件都会断链。合并成单文件后整条依赖链才消失。
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
