@@ -1128,6 +1128,8 @@ enroll（cmd **1007**）的 token 里 `msg[0x3]` 是版本、`msg[4..7]` 是 cha
 `max_count` 是 `[0x2b9cc8 + 0x104]`（= `0x2b9dcc`）。实测：
 
 * DETECT、INIT 之后这个字段**仍然是 0**（不是初始化阶段写进去的）；
+* 更准确地说：先把它写成 `0xA5A5A5A5`，跑完 DETECT 再看，它又变回 **0**
+  —— 说明 DETECT/INIT 会清/写这个字段，只是写进去的值来自一份"全零的配置"；
 * 用 `GF_POKE=0x2b9dcc=5` 手工写 5，enroll 立刻越过这个检查，继续往下走
   （又发了 273 字节配置写），然后 `SIGILL` 跳到宿主 musl 的代码里——因为
   `finger_0_0.so` 不存在 → fingerlist 为 NULL →
