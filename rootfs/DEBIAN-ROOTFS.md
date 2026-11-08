@@ -629,3 +629,53 @@ journalctl -b -u gdm | grep -c "never registered" # 0
 dmesg | grep -c "layer_info is null"              # 0
 dpkg-query -W -f='${Package}\n' | grep -cE '^(plasma|kde|kwin|libkf|sddm)'  # 0
 ```
+
+---
+
+## 附录：三个 console getty 的协调（denial 起不来的真正原因）
+
+### 症状
+
+开机后屏幕停在内核日志控制台，denial 不出现；**插上 USB 就"进系统"**，拔掉又会"停"。看起来像"必须插 USB 才能开机"。
+
+### 根因：agetty 之间的 `/dev/console` 独占锁争用
+
+`/proc/locks` 现场：
+
+```
+1: FLOCK ADVISORY WRITE 411 00:09:14   ← serial-getty@ttyGS0 的 agetty 持有
+1: -> FLOCK ADVISORY WRITE 408 00:09:14 ← getty@tty1 的 agetty 排队
+```
+
+`agetty` 会 `flock()` 独占 `/dev/console`。当时有三个 console getty：
+
+| 单元 | 程序 | 结果 |
+| --- | --- | --- |
+| `getty@tty1` | `agetty --autologin kily` | **卡在 `flock`**（`wchan=locks_lock_inode_wait`）→ autologin 不执行 → `user@1000` 不启动 → denial 永远不起 |
+| `serial-getty@ttyGS0` | `agetty`（USB 串口） | 先拿到锁，一直持有 |
+| `serial-getty@ttyS0` | `agetty`（SoC UART，接不出来） | 同样参与争抢 |
+
+**插拔 USB 会让 gadget 事件重启 `serial-getty@ttyGS0`**，锁短暂释放，tty1 才有机会抢到——这就是"有时行有时不行"。
+
+### 协调方案（已落地）
+
+```ini
+# /etc/systemd/system/serial-getty@ttyGS0.service.d/no-flock.conf
+[Service]
+ExecStart=
+ExecStart=-/bin/bash -l          # 串口调试保留，但不再用 agetty → 不抢锁
+```
+
+```sh
+systemctl mask serial-getty@ttyS0.service   # UART 口接不出来，彻底关掉
+```
+
+结果：**只有 tty1 一个 agetty**，它永远能拿到锁；串口插上直接是 root shell（不用登录）。
+
+> `serial-getty@ttyS0` 是 `systemd-getty-generator` 按内核 cmdline 里
+> `console=ttyS0` **自动生成**的，`disable` 无效（显示 `enabled-runtime`），必须 `mask`。
+
+### 教训
+
+* 不要在会话/console 相关的 unit **运行中**改 `ExecStart` 再加停别的 getty——实测会让 systemd 自己卡死（`systemctl` 报 `Connection timed out`，内核还活着、ping 通、SSH 被拒绝），只能硬重启。
+* 桌面会话（denial，以 kily 运行）通过 logind 请求 reboot/poweroff 是**保留**的能力（`CanReboot=challenge`，走 polkit agent）；不要用 polkit 规则封死，否则电源菜单失效。
