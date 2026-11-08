@@ -116,6 +116,25 @@ poweroff 之前**。需要 `journalctl -b -1` 确认关机序列的最后一步�
 * 或者"卡住"的其实是 §4.1 的重启（会话被 logind 干掉），而不是 autologin 失败；
 * 或者 denial 自身的 PAM `setuid failed`（kily 非 root）导致会话失败 → 走了重启路径。
 
+## 4.4 ⭐ 补充观察（用户 2026-11-08 补充）：**开机和关机都要求插着 USB**
+
+原话：「只要开机连接 USB，关机也有连接 USB」。
+
+这把范围从"启动链"扩到了**关机链**，而两条链共有的东西很少：
+
+* `mtu3` / USB gadget（`usb-gadget.target`）
+* `serial-getty@ttyGS0`（现在是 `bash -l`）
+* systemd 的 shutdown 事务里与这些 unit 相关的 stop 顺序
+
+两种可能，需要一次实验区分：
+
+| 可能 | 表现 | 验证 |
+| --- | --- | --- |
+| **A. 关机时挂住**（systemd 等某个 unit 超时，最终没 poweroff） | 不插 USB 关机后设备黑屏但没真正断电／过一会自己重启 | 不插 USB 执行关机 → 冷启动 → 读 `journalctl -b -1` 的关机序列 |
+| **B. 关机由用户态发起（denial → logind PowerOff），而这条路径依赖 USB** | 关机按钮无反应／重启而不是关机 | `busctl monitor org.freedesktop.login1` 挂着再关机，看有没有 Reboot/PowerOff 请求 |
+
+建议先做 A：**不插 USB 关机 → 插 USB 开机 → 读上一次 boot 的日志**，直接看关机卡在哪一步。
+
 ## 5. 下次现场如何取证（重要）
 
 **关键前提：卡住时 WiFi 可能还活着**（本次就成功 SSH 进去过）。所以先试 SSH，别急着重启。
