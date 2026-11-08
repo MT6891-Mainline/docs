@@ -626,6 +626,47 @@ kernel embedded FDT     281,906 字节
 下一个文件接着它的属性），`mt6893.dtsi` 又是被这些切片 include 的。只要还有
 一个切片在编译，删任何别的文件都会断链。合并成单文件后整条依赖链才消失。
 
+
+## 拆分完成：mt6893.dtsi + 板级 dts（2026-11-08）
+
+按 MT6895 的组织方式（`mt6895.dtsi` 4,076 行 + `mt6895-xiaomi-xaga.dts`
+1,449 行）拆分：
+
+| 文件 | 行数 | 内容 |
+| --- | --- | --- |
+| `mt6893.dtsi` | **7,307** | SoC：CPUs/GIC/timer/clocks/power/IOMMU/SMI/MMC/UFS/I2C/SPI/PMIC wrapper/display/GPU/SCP |
+| `mt6893-xiaomi-chopin.dts` | **2,851** | 板级：model/memory/reserved-memory(mblocks)/regulators/pin states/panel/touch/sensors/WiFi/USB |
+
+### 分类方法
+
+按 `reg` 地址判断：`0x1000_0000 - 0x1FFF_FFFF` 属于 SoC 外设空间。
+
+- 注意 `#address-cells = <2>`，地址在**第二个** cell，第一次按第一个 cell 判
+  会把所有外设判成板级（SoC 只剩 31 个）
+- 结果：SoC **478** 个直接子节点，板级 **147** 个
+
+### 构建验证
+
+```
+mt6893.dtsi               7,307 行
+mt6893-xiaomi-chopin.dts  2,851 行
+DTB                       281,830 字节（拆分前 281,906，差 76 字节）
+embedded FDT              281,830 字节
+```
+
+DTB 缩小 76 字节、反编译 diff 3,715 行，但**差异来自节点顺序重排**（SoC 节点
+先输出、板级后输出），内容等价。所有 phandle 都是显式数字，重排不影响引用。
+
+启动镜像：`out-scp-v194-split/boot-stockdt.img`（md5 `081139c711f4d015b2b1562196d9b66b`）。
+
+### 后续可以做的
+
+- 板级文件里的 `&label` 覆盖还没做（现在是完整节点定义），进一步可以改成
+  `&pio { ... }` / `&i2c0 { ... }` 形式，像 mt6895 那样
+- 数字 phandle 可以逐步换成 label
+- SoC dtsi 里的厂商 binding 节点（`mediatek,mfb`、`mediatek,venc_gcon` 等）
+  要等对应驱动移植后再改
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
