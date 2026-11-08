@@ -147,29 +147,36 @@ journalctl -b -p warning | tail -20
 若 SSH 进不去（用户态已停），则改为：**不插 USB 开机 → 等到卡住 → 插 USB 让它起来 →
 `journalctl -b` 看这次 boot 里在插线之前发生了什么**（日志是同一 boot 的，能追溯）。
 
-## 4.5 USB 子系统诊断（2026-11-08 夜，真机抓取）
+## 4.5 USB 子系统诊断（结论已修正：**USB 栈是健康的**）
 
-| # | 现象 | 证据 | 影响 |
-| --- | --- | --- | --- |
-| 1 | `g_serial` 与 UDC 竞速 | `[1.58] UDC core: g_serial: couldn't find an available UDC` → `[1.90] g_serial ready` / `mtu3: gadget (high-speed) pullup D+` | 串口 gadget 绑定偏晚；`serial-getty@ttyGS0` 的启动随之抖动——正是 §3.1 那把 `/dev/console` 锁被反复争抢的诱因 |
-| 2 | **`mt6360-tcpc` 注册失败** | `[1.66] mt6360-tcpc: Failed to register tcpci port` | **没有 Type-C 状态机**：`/sys/class/typec/port0` 显示 `data_role=host`、`power_role=source`，而支持集只有 `device`/`sink` → 插拔线不会产生正常的 role-switch/PD 事件，gadget 生命周期不稳定 |
-| 3 | i2c 客户端重复注册 | `i2c-5: Failed to register i2c client subpmic_pmic at 0x1a (-16 EBUSY)` | DT 里的 `subpmic_pmic@1a`（`mediatek,subpmic_pmic`，树内无匹配驱动）与另一次注册冲突 |
-| 4 | `usb_type_c@4e` 被禁用 | `mt6893-xiaomi-chopin.dts`: `usb_type_c@4e { status = "disabled" }` | 供应商的 type-c 子模块未启用 |
+首轮诊断把 `mt6360-tcpc: Failed to register tcpci port` 当成 Type-C 故障，**这是错的**。
+仔细核对后：
 
-其它已确认正常：UDC `11201000.usb` 存在且 state=`configured`；`usb-gadget.target` active；
-`/dev/ttyGS0` 存在；充电（`mt6360-chg`）正常，插线能读到 `online=1`、`status=Charging`。
+| 观察 | 结论 | 证据 |
+| --- | --- | --- |
+| `[1.66] Failed to register tcpci port` | **`-EPROBE_DEFER`，不是故障**。tcpc 需要 mtu3 注册的 role switch，而 mtu3 是 xHCI 的父设备、1.90 s 才 probe；内核随后静默重试**成功** | `/sys/class/typec/port0/device` → `platform/11f00000.i2c5/i2c-5/5-0034/mt6360-tcpc.5.auto`；`/sys/class/usb_role/11201000.usb-role-switch` 存在；插线时主机侧能枚举出 `ttyACM0` |
+| `[1.58] g_serial: couldn't find an available UDC` | 同样是时序：1.90 s mtu3 就绪后 gadget 绑定成功 | `g_serial ready` + `mtu3: gadget (high-speed) pullup D+` + `/dev/ttyGS0` 存在 |
+| `i2c-5: Failed to register i2c client subpmic_pmic at 0x1a (-16 EBUSY)` | 真实但无关：`mediatek,subpmic_pmic` 树内**没有驱动**，不影响 tcpc/chg | 充电、tcpc 均正常 |
+| `data_role=host [device]` / `power_role=source [sink]` | 是 tcpm 端口的**当前状态**，不是故障；`port_type=[dual]` | 插拔线行为正常 |
 
-**结论**：#2 是 USB 侧最值得修的一处。修好它，插拔线行为变确定，也能消掉"gadget 抖动 →
-串口 getty 反复重启"这个变量。
+**修复（内核 `1958eff`，镜像 v209）**：`tcpci_mt6360.c` 里只对真实错误打印，`-EPROBE_DEFER`
+静默返回（内核惯例），并给真错误带上 `%pe` 错误码：
 
-**下一步（诊断，非盲改）**：
+```c
+if (IS_ERR(mti->tcpci)) {
+        if (PTR_ERR(mti->tcpci) != -EPROBE_DEFER)
+                dev_err(&pdev->dev, "Failed to register tcpci port: %pe\n", mti->tcpci);
+        return PTR_ERR(mti->tcpci);
+}
+```
 
-1. 在 `tcpci_mt6360_probe()` 的失败分支打印 `PTR_ERR(mti->tcpci)` 的具体错误码
-   （现在只有 "Failed to register tcpci port"，没有 errno）；
-2. 若为 `-EIO/-ENXIO`，说明 `tcpci_init()` 读 `TCPC_ALERT` / `TCPC_VERSION` 时 I2C 访问失败
-   → 查父 regmap（mt6360 @ i2c-5 0x34）与 §3 里那条 EBUSY 的关系；
-3. 核对 DT 里 `mediatek,mt6360-tcpc` 节点的 `interrupts` / `interrupt-names = "PD_IRQB"`
-   是否指向 PMIC 的正确 IRQ（`platform_get_irq_byname` 失败时 probe 会静默返回）。
+### 因此：USB 侧**没有**能解释"开机必须插 USB"的缺陷
+
+嫌疑重新收回到三处：
+
+1. `getty@tty1` 的 autologin 偶发失败（锁争用已修，但需在**故障现场**再确认）；
+2. denial 的 PAM `setuid failed`（会话以 uid 1000 运行，PAM 无法 setuid）→ 会话失败；
+3. 用户态通过 logind 发起的 Reboot/PowerOff（`busctl monitor org.freedesktop.login1` 可抓）。
 
 ## 5. 下次现场如何取证（重要）
 
