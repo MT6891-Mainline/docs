@@ -466,6 +466,38 @@ compat 也修好了）。TA 连续调用时会缓存状态、不再发 SPI，所
    从它拿到 `CMD_TEST_BMP_DATA` / `GF_CMD_TEST_RAW_DATA` 的 id 后直接调，
    这类命令通常不等 finger-up。
 
+
+### M1.14 test 族与 desc 缓冲区实验（2026-11-08）
+
+按计划试了第 3 条（test 族绕过 finger-up 门），结果与结论：
+
+| 实验 | 结果 |
+| --- | --- |
+| test 族 sweep（id 1055–1070，`desc[2]=2`） | 全部落到 `gf_ta_invoke_user_cmd_entry_point` → `GF_ERROR_BAD_PARAMS`。**入口族的选择是有状态的**，先 detect+init 之后再打同样的 desc 会走 user 而不是 test |
+| `probe <id> 0 2` 逐 id（1040–1070，不 prime） | 全部返回同一个 init 期错误，命令本体没有可区分的反馈 |
+| 给 `desc[1]` 传 64 KB 缓冲区 + `desc[3]=长度` | **INIT 直接卡死**（命令 1001 不再返回）→ `desc[1]` 不是简单的 in/out 缓冲指针 |
+| 只传 `desc[1]`、长度置 0 | 同样卡死 |
+
+静态分析得到的有用坐标（留作下一步）：
+
+* `hal_test_driver_cmd@0x294ac` → 内部用 `w0=0x423(1059)` 调 `gf_hal_test_invoke_command`
+  —— test 族的 id 落在 1059 附近（和正常族 1000/1001/1016/1021 是两套编号）。
+* `dump_cali_and_bmp@0x3ab08`（856 B）是 HAL 里真正的"出图"路径：
+  `gf_get_sensor_width/height` → `gf_dump_raw_data` → `gf_dump_encoder_fopen/fwrite/fclose`。
+  **但它是 aarch64 代码，我们的 host 是 32 位，调不了**。这条只说明了 HAL
+  出图的组成，不能直接用。
+
+### 结论：下一步只能反 `milan_check_finger_up`
+
+所有"绕过"的尝试（物理状态、寄存器 spoof、时钟、重置、test 族、desc 缓冲）
+都排除了。门在 TA 内部，必须读懂它：
+
+* 错误字符串 `"finger is not leave"` @ vaddr `0x101994`；
+* 字面量池引用 @ `0x25dec`，函数体在其之前（**Thumb 代码**，需 `-M force-thumb`）；
+* 目标：找到它读的寄存器地址 + 它比较的那一位。
+
+拿到那一位之后，在 `ta_host32` 里用现成的 `--spoof` 精确篡改即可，工具已经就绪。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
