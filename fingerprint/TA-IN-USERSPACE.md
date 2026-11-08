@@ -222,6 +222,42 @@ mod=0 sub=3 -> [gf_ta_dump] invalid parameters cmd_id=GF_CMD_DETECT_SENSOR
    正确的前置状态下调。
 3. 抓 `CAMERA_CAPTURE` 的 SPI 流量，确认帧格式和我们内核侧一致，再看画质。
 
+
+### M1.7 GF_CMD 表开始成形（2026-11-08）
+
+从 `libgf_hal.so` 的公共层反出来（debugdata 带地址，`gf_hal_invoke_command` =
+`invoke(type, cmd_id, in, inlen)`，`type=1` 走正常路径）：
+
+| cmd_id | 名字 | 依据 |
+| --- | --- | --- |
+| 1000 | `GF_CMD_DETECT_SENSOR` | TA 自己的错误日志 |
+| 1001 | `GF_CMD_INIT` | `hal_milan_an_series_init` 里 `mov w0,#0x3e9` |
+| 1016 | ? | 同函数里 `mov w0,#0x3f8` |
+| 1021 | `GF_CMD_CAMERA_CAPTURE` | `gf_hal_common_camera_capture` 里 `mov w0,#0x3fd` |
+
+其余命令可以照这个办法一个个挖：`gf_hal_common_<动作>` 的头部就是 `w0 = cmd`。
+
+### 当前卡点：`milan_init_configuration` 拿不到 chip id
+
+```
+$ ta_host32 goodix.ta probe 1001 1 1
+[gf_milan][milan_init_configuration] unsupport sensor, chip id=0x00000000
+→ GF_ERROR_SENSOR_NOT_AVAILABLE (1062)
+```
+
+两件事要修：
+
+1. **顺序**：`DETECT_SENSOR`(1000) 才是读芯片 ID 的命令（sweep 里它做过一次
+   `f0 00 00`），`INIT`(1001) 必须排它后面，且同一个进程内；
+2. **SPI stub 的返回语义**：读芯片 ID 只出现了地址相 `tx=f0 00 00`，
+   数据相 `[0xF1]` 根本没发出去 → 说明 TA 在第一帧之后就判定失败。
+   已照 xaga 的做法加了"TEE 服务返回 1 字节状态 + payload 右移一位"，
+   但还没验证，下一轮从这里继续。
+
+参考实现（xaga）里那句注释就是关键：
+> Large reads: the TEE platform clocks a dummy byte after the command.
+> Small reads instead get a leading status byte in the response.
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
