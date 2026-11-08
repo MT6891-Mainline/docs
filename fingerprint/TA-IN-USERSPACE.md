@@ -870,6 +870,31 @@ const struct mt_chip_conf spi_ctrdata = {
 在 qemu 里看 `r1`/`r7`/`r3` 的来源（它们分别由哪条指令写入、来自哪个数组），
 再判断这个比较的真实语义。工具全部就绪：`replay.sh` + `-dfilter 0x25b80+0x28`。
 
+
+### M1.26 继续与原厂内核逐项对照（2026-11-08）
+
+把原厂驱动里所有"可能影响传输"的设定过了一遍：
+
+| 原厂设定 | 我们 | 结论 |
+| --- | --- | --- |
+| `setuptime/holdtime/cs_idletime = 10` | 0 → **v204 已补成 10 µs** | ✅ 真根因（M1.24） |
+| `com_mod = FIFO_TRANSFER`（永远 FIFO） | 主线 `len>32` 且 4 字节对齐时走 **DMA** | ❌ 实测排除：同窗口 DMA 读 96 B 与 FIFO 分 4 次读 24 B **逐字节相同** |
+| `spi->max_speed_hz = 1 MHz`，TA 按 desc 切换 | 已按 `desc[0]` 反算下发（925 kHz / 5.5 MHz） | ✅ 一致 |
+| `CPOL=0 / CPHA=0 / MSB / LENDIAN` | `SPI_MODE_0`、8 bit | ✅ 一致 |
+| `gf_spi_clk_enable()` 包住整段操作（`mt_spi_enable_master_clk`） | 主线按传输粒度 runtime PM | 传输数据正确，判为无关 |
+| DT `power-type = <1>` | — | 原厂驱动里**根本没读这个属性**，忽略 |
+| `gf_miso_gpio_cfg`（MISO 上下拉切换） | — | 只在 `SUPPORT_REE_OSWEGO` 下编译，与我们无关 |
+| `gf_bypass_flash_gpio_cfg` | — | 原厂里是空函数（TODO） |
+
+原厂驱动里唯一自己写的寄存器是 fw 升级路径（`0x5081/0x4180/0x4010/0x40B0/0x404B`），
+正常初始化全在 TA 里 —— 所以"从内核补功能"这条路已经走到底了：
+**总线层面已经完全对齐**。
+
+### 剩下的只有一个问题
+
+`0x25b9c` 那个比较的输入（`r1=0xb3`、`r7=0x13`、`r3=8`）还没搞清楚来源。
+下一步在 qemu 里看它们由谁写入、取自哪个数组——纯离线，`replay.sh` 就绪。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
