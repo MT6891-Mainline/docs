@@ -789,6 +789,41 @@ a42138cfc  move chopin pin states into a board &pio override
   可以合并到 mainline 的 `&i2c5 { mt6360@34 { regulators {...} } }` 里
 - `mtk_lpm` / `mtk_lpm_sysram` 等厂商节点可以去掉（如果驱动不用）
 
+
+## phandle 属性全部移除（2026-11-08）
+
+所有引用都是 `&label` 之后，654 个 `phandle = <0xNN>` 属性变成冗余——dtc
+会自己分配编号。删除前先清掉最后 3 处数字引用：
+
+| 位置 | 原值 | 改为 |
+| --- | --- | --- |
+| `phys`（UFS PHY） | `<0xc5>` | `<&ufs_mphy>`（补了 label） |
+| `ppi-interrupt-parent` ×2 | `<0x01>` | `<&gic>` |
+
+然后删掉全部 654 个 `phandle` 属性：
+
+```
+mt6893.dtsi                7,307 → 5,803 行
+mt6893-xiaomi-chopin.dts   3,555 → 3,333 行
+DTB                        281,602 → 278,955 字节
+```
+
+**phandle 编号全部变了**（dtc 按引用顺序重新分配，486 个），但每个引用仍指向
+同一个节点——这是 DTB 大小变化但功能等价的原因。
+
+提交：`639c07b24`。启动镜像：
+`out-scp-v197-nophandle/boot-stockdt.img`（md5 `0551030b4b0cec55a9947b2b11a87520`）。
+
+### 验证方法
+
+```sh
+# 引用是否都解决（dtc 遇到未定义的 &label 会直接报错）
+make dtbs
+
+# __symbols__ 是否仍然完整
+dtc -I dtb -O dts <dtb> | grep -c '= "/'
+```
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
