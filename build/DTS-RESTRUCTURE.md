@@ -483,6 +483,57 @@ type_c_port0 {
 3. 删除板级里的厂商 `subpmic@34`（vendor 绑定，约 60 行）
 4. 编译 → 刷 boot → 验证：充电、电池、Type-C、触摸、显示
 
+
+## v191 验证 + 传感器回归修复（2026-11-08）
+
+v191（单文件 DTS）刷机结果：
+
+| 功能 | 结果 |
+| --- | --- |
+| 开机 | ✅ |
+| 显示（主线 mtk-drm） | ✅ |
+| 触控 | ✅ |
+| GPU / UFS | ✅ |
+| **WiFi** | ✅ 恢复 |
+| **蓝牙** | ✅ 恢复 |
+| **自动旋转 / 加速度计** | ❌ 仍然不工作 |
+
+### 原因：v189 试验遗留的配置
+
+v189（试 rv SCP 驱动）时执行过：
+
+```sh
+scripts/config -d MTK_SENSORHUB
+```
+
+之后一直没恢复，导致 v190/v191 的内核**不含 sensorhub 驱动**：
+
+```
+# CONFIG_MTK_SENSORHUB is not set
+```
+
+于是 `sensorhub_iio.c` 不会注册 `chopin-als` / `chopin-accel` 两个 IIO 设备
+（`/sys/bus/iio/devices/` 里只剩 MT6359 和 mt6360-adc），加速度计数据为空，
+自动旋转自然失效。
+
+**与 DTS 无关** —— DTB 是 282,313 字节的等价版本，传感器节点都在。
+
+### 修复
+
+```sh
+scripts/config -e MTK_SENSORHUB
+make olddefconfig            # CONFIG_MTK_SENSORHUB=y
+port/tools/build-kernel.sh
+```
+
+v192：`out-scp-v192-sensor/boot-stockdt.img`（md5 `4f66941e8e0ea1205db89d001705638c`）。
+
+### 教训
+
+内核配置的临时改动（`scripts/config -d/-e`）会**留在 `.config` 里**，跨构建
+持续生效。试错性质的配置必须在同一次会话里恢复，或者记录到文档里。这次
+`MTK_SENSORHUB` 就是从 v189 一直漏到 v191。
+
 ## 当前状态（2026-11-07）
 
 - 计划完成；已确认切片问题，路线改为「按外设重写」
