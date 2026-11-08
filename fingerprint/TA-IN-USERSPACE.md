@@ -428,6 +428,44 @@ compat 也修好了）。TA 连续调用时会缓存状态、不再发 SPI，所
 2. 再调 `camera_capture`，看状态是否翻转；
 3. 若翻转，说明这条路对，把"等中断 → 采集 → 取图"做成循环。
 
+
+### M1.13 中断通路验证，finger-up 门仍未过（2026-11-08）
+
+中断这条路是通的：
+
+```
+@@ irq enable -> 0
+@@ waiting for a finger edge (3/12)...
+@@ irq wait -> 0            ← 用户敲击电源键时立即返回
+```
+
+空闲时 `IRQ_WAIT` 正常超时，敲击时立刻返回 —— **传感器自身的手指检测是好的**。
+
+但每次 `camera_capture` 之后 TA 都把状态缓存住（`spi` 计数停在 1214，desc 完全不变），
+再调也不重试。又排除了四个新假设：
+
+| 假设 | 实验 | 结果 |
+| --- | --- | --- |
+| 之前手上一直按着，所以门是对的 | 你明确移开手、10 秒不碰 | 仍报 `finger is not leave` |
+| 传感器状态被之前实验搞乱 | 先 `GOODIX_FP_IOC_RESET` 再走全流程 | 仍报同样错误 |
+| 门用的值在 0x0058 / 0x00a2 | 逐位 spoof（含 0x4010 拆成 bit） | 无效 |
+| 是 SPI 时钟 | 按 `desc[0]` 反算 speed_hz | 无效 |
+
+采集返回的 desc 是 `00000000 00000000 00000001 00000000 00000001 0000000b ...`，
+`desc[4]=1` 很可能就是 TA 回填的"手指状态 = 有手指"。
+
+### 下一步优先级
+
+1. **反 `milan_check_finger_up`**：字符串在 vaddr `0x101994`，字面量池在
+   `0x25dec`，函数体在它之前（Thumb 代码）。TA 是 ARM/Thumb 混编，用
+   `-M force-thumb` 分段读，找 `tst/ands` + 分支即可定位它比较哪一位。
+2. **看 HAL 的采集前序**：`libgoodixhwfingerprint.so`（20 KB）和
+   `fingerprint.goodix.so`（11 KB）都很小，采集前可能还有
+   "取手指状态 / load_instance_data" 之类的调用，是我们漏掉的。
+3. **试 test 族的 raw data 命令**：`hal_test_driver_cmd@0x294ac` 是通用入口，
+   从它拿到 `CMD_TEST_BMP_DATA` / `GF_CMD_TEST_RAW_DATA` 的 id 后直接调，
+   这类命令通常不等 finger-up。
+
 ### M2 原始计划（留档）
 
 1. `ut_pf_spi_send_and_receive` → `ioctl(/dev/goodix_fp)`。注意参数语义
