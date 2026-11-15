@@ -2,9 +2,12 @@
 
 同 SoC 的第二台机器（chopin 是 Redmi Note 10 Pro）。移植刚开始。
 
-> **2026-11-15**：失败点已定位到 **LK**（不是内核）：LK 在交出控制权前
-> `panic: ASSERT boot_info.c:616 g_boot_info.hdr_loaded`，详见
-> [`linux/STATUS-2026-11-15.md`](linux/STATUS-2026-11-15.md)。
+> **2026-11-15**：启动链已完整摸清，见 [`linux/BOOT-CHAIN.md`](linux/BOOT-CHAIN.md)。
+> 关键结论：ares 的 boot image 契约里 `dtb_addr` 必须是 **0x47c80000**（chopin 是
+> 0x41f78000），抄错会让 LK 在 `boot_info.c:616` 断言
+> `g_boot_info.hdr_loaded` 并 panic。改成 0x47c80000 后内核第一次在 ares 上跑起来
+> （USB gadget 枚举 + initramfs 用户态）。
+> 失败分析的来龙去脉见 [`linux/STATUS-2026-11-15.md`](linux/STATUS-2026-11-15.md)。
 
 | 路线 | 目录 | 状态 |
 | --- | --- | --- |
