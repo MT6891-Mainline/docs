@@ -119,8 +119,8 @@ Redmi Note 10 Pro（MT6891 / "chopin"）从 Android 厂商内核换到主线 Lin
 
 | 日期 | 文档 | 内容 |
 | --- | --- | --- |
-| 2026-11-01 | [`UEFI-PORT.md`](archive/UEFI-PORT.md) | Mu-Silicium UEFI 移植（参考 MT6789Pkg） |
-| 2026-11-01 | [`CHOPIN-WOA-HANDOFF.md`](archive/CHOPIN-WOA-HANDOFF.md) | WoA 交接（固件基线 r81） |
+| 2026-11-01 | [`UEFI-PORT.md`](../uefi/archive/UEFI-PORT.md) | Mu-Silicium UEFI 移植（参考 MT6789Pkg） |
+| 2026-11-01 | [`CHOPIN-WOA-HANDOFF.md`](../uefi/archive/CHOPIN-WOA-HANDOFF.md) | WoA 交接（固件基线 r81） |
 
 **结果**：探路性质，未成为主线（主线仍是 Debian + denial 桌面）。
 
