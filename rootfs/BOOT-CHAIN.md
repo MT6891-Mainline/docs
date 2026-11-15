@@ -50,10 +50,13 @@ multi-user.target reached after 7.172s in userspace
 
 | 产物 | DTB | 用途 |
 | --- | --- | --- |
-| `boot-stockdt.img` | 从原厂 boot.img 抽出来的 stock DTB | **日常使用**：LK 眼里和原厂一致 |
+| `boot-stockdt.img` | 从原厂 boot.img 抽出来的 stock DTB | **只刷这个**：LK 眼里和原厂一致 |
 | `boot-stockdt-wrapped.img` | stock DTB 包进 Android DTBO 容器 | LK 按 DTBO 解析时会用到 |
-| `boot-owndtb.img` | 我们自己编译的 DTB | 调试用 |
-| `boot-owndtb-rawdtb.img` | 同上但不包容器 | 对比用 |
+
+> ❌ **不要用自己编译的 DTB 出镜像**。早期的 `boot-owndtb.img` 和
+> `boot-owndtb-rawdtb.img` 两个变体**在本板上都开不了机**：raw 的那份 LK 直接拒绝
+> （`ufdt_apply_overlay() failed`，内核根本不启动），包了容器的那份能过 LK、但死在
+> 内核早期。`port/tools/build-images.sh` 已经把这两个产物移除，只出 stock-DT 两个。
 
 > 关键点：LK 会把 **dtbo 分区**叠加到 base tree 上。所以 stock DTB 那条路最稳——
 > 原厂 LK 认识它，不会因为不认识我们的树而报错。
