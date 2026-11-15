@@ -155,7 +155,7 @@ boot state: orange
 ## 4. 内核看到的世界
 
 * `x0` = LK 叠加 dtbo 后的 FDT：**288,607 字节**（`adb shell su -c cat /sys/firmware/fdt`）。
-  里面有 32 个 `mblock-*` 保留区（清单见 `STATUS-2026-11-15.md` §2）—— 这份树才是设备真实布局，
+  里面有 31 个 `mblock-*` 保留区（清单见 `STATUS-2026-11-15.md` §2）—— 这份树才是设备真实布局，
   我们早期用 "boot.img dtb + dtbo 用 fdtoverlay 合成" 得到的树**一个 mblock 都没有**。
 * cmdline 是 LK 拼出来的（约 1.6 KB），包含 `console=tty0 console=ttyS0,921600n1 root=/dev/ram`、
   `ramoops.mem_address=0x48090000 mem_size=0xe0000`、`androidboot.*`、
@@ -245,7 +245,7 @@ Partition is write protected
 2. `out-ares/boot-min.img`（= t6 等价，19 MB）复测。
 3. 内核日志回传：LK 不转存我们的 log_store 环，得靠 `console=ttyGS0` 实时看，或者让 init 把
    dmesg 写到某个可读分区。
-4. 用运行时 `fdt.dts` 替换内嵌板级树（补 32 个 mblock）。
+4. 用运行时 `fdt.dts` 替换内嵌板级树（补 31 个 mblock）。
 
 ## 11. ares 的内嵌板级树（2026-11-15 实现）
 
@@ -256,7 +256,7 @@ ares 现在复用同一套机制，但换成自己的树：
 
 | 文件 | 作用 |
 | --- | --- |
-| `arch/arm64/boot/dts/mediatek/mt6893-xiaomi-ares.dts` | 树本体：从 `cat /sys/firmware/fdt`（288,607 B）反编译得到，含 32 个 `mblock-*`、ares 面板/触摸/regulator；`/chosen/bootargs` 改成我们的 cmdline；**故意不带** `linux,initrd-start/end` |
+| `arch/arm64/boot/dts/mediatek/mt6893-xiaomi-ares.dts` | 树本体：从 `cat /sys/firmware/fdt`（288,607 B）反编译得到，含 31 个 `mblock-*`、ares 面板/触摸/regulator；`/chosen/bootargs` 改成我们的 cmdline；**故意不带** `linux,initrd-start/end` |
 | `arch/arm64/kernel/ares-board.dts` | `#include` 上面那份（和 `chopin-board.dts` 对应） |
 | `arch/arm64/kernel/ares-dtb.S` | `.incbin "ares-board.dtb"`，符号 `_binary_ares_board_dtb_start/end` |
 | `CONFIG_MTK_BOARD_ARES` | 选 ares 树；否则还是 chopin 的 |
