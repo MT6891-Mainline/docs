@@ -20,6 +20,7 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 
 | 想知道什么 | 读这个 |
 | --- | --- |
+| **整个移植是怎么一步步走到今天的** | [`history/README.md`](history/README.md)（按时间顺序的 9 个阶段） |
 | **现在能干什么、不能干什么** | [`status/STATUS.md`](status/STATUS.md) |
 | 电量计为什么读不到、PD 为什么不协商 | [`power/CHARGING.md`](power/CHARGING.md) |
 | GPU 怎么从 350 提到 810 MHz | [`gpu/GPU-PERF.md`](gpu/GPU-PERF.md) |
