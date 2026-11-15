@@ -28,7 +28,7 @@ Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Lin
 | 显示时钟链路 | [`display/DRM-CLOCK-GAP.md`](display/DRM-CLOCK-GAP.md) |
 | 厂商 DRM 有什么坑 | [`display/V2-DRM-AUDIT.md`](display/V2-DRM-AUDIT.md) |
 | rootfs 怎么构建、GNOME 怎么配 | [`rootfs/DEBIAN-ROOTFS.md`](rootfs/DEBIAN-ROOTFS.md) |
-| 开机那一刻发生了什么 | `git/chopin-initramfs`（`rootfs` 分支的 README） |
+| **开机那一刻到底发生了什么** | [`rootfs/BOOT-CHAIN.md`](rootfs/BOOT-CHAIN.md)（从上电到 denial 的完整链路） |
 | Droidloom（安卓应用）为什么跑不起来 | [`desktop/DROIDLOOM.md`](desktop/DROIDLOOM.md) |
 
 ## 目录

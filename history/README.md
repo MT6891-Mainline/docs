@@ -152,6 +152,11 @@ Redmi Note 10 Pro（MT6891 / "chopin"）从 Android 厂商内核换到主线 Lin
 
 ---
 
+## 附：启动链
+
+开机链路本身已经单独成文：[`rootfs/BOOT-CHAIN.md`](../rootfs/BOOT-CHAIN.md)
+（LK → 内核早期 → initramfs PID 1 → systemd → getty → denial → 关机）。
+
 ## 附：文档目录对照
 
 | 主题 | 目录 |
