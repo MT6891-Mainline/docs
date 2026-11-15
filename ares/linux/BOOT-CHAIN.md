@@ -246,3 +246,40 @@ Partition is write protected
 3. 内核日志回传：LK 不转存我们的 log_store 环，得靠 `console=ttyGS0` 实时看，或者让 init 把
    dmesg 写到某个可读分区。
 4. 用运行时 `fdt.dts` 替换内嵌板级树（补 32 个 mblock）。
+
+## 11. ares 的内嵌板级树（2026-11-15 实现）
+
+chopin 的做法是：boot.img 里放原厂树（LK 才肯用它做 dtbo overlay），内核在
+`setup_arch()` 里把 LK 的 FDT 换成链接进 Image 的板级树。
+
+ares 现在复用同一套机制，但换成自己的树：
+
+| 文件 | 作用 |
+| --- | --- |
+| `arch/arm64/boot/dts/mediatek/mt6893-xiaomi-ares.dts` | 树本体：从 `cat /sys/firmware/fdt`（288,607 B）反编译得到，含 32 个 `mblock-*`、ares 面板/触摸/regulator；`/chosen/bootargs` 改成我们的 cmdline；**故意不带** `linux,initrd-start/end` |
+| `arch/arm64/kernel/ares-board.dts` | `#include` 上面那份（和 `chopin-board.dts` 对应） |
+| `arch/arm64/kernel/ares-dtb.S` | `.incbin "ares-board.dtb"`，符号 `_binary_ares_board_dtb_start/end` |
+| `CONFIG_MTK_BOARD_ARES` | 选 ares 树；否则还是 chopin 的 |
+| `arch/arm64/kernel/setup.c` | 按该配置选符号，打印 `ARES-DTB: overriding LK FDT ...` |
+
+两个关键点：
+
+1. **`linux,initrd-*` 故意不写**：第一次 `early_init_dt_scan_chosen()`（LK 的树）已经把
+   LK 发布的 initrd 范围读进内核，而 LK 在 ares 上**确实会**把
+   `linux,initrd-start/end` 写成这次 ramdisk 的真实范围（运行时树里就是
+   `0x51100000 / 0x5330a9b0` = 原厂 35.7 MB ramdisk）。swap 之后再扫一遍我们的树，
+   属性不存在 → 保留 LK 的值，于是任意大小的 ramdisk 都对。
+   （chopin 是另一种做法：树里带着厂商的陈旧值，打包时用 `fdt-initrd.py` 改掉。）
+2. `/chosen/bootargs` 在树里写死 = 内核最终 cmdline（swap 后会重新读），所以
+   `console=ttyGS0`、`ignore_loglevel` 这些不用再靠 boot.img 的 cmdline。
+
+验证：
+
+```
+$ strings Image | grep -m1 ARES-DTB
+ARES-DTB: overriding LK FDT with embedded board tree (%d bytes)
+$ dtc -I dtb -O dts <embedded> | head
+model = "MT6893Z/CZA";          <- ares 运行时树
+$ grep -c mblock <embedded>.dts
+32
+```
