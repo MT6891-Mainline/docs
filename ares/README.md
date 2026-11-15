@@ -1,10 +1,14 @@
 # ares — Redmi K40 Gaming（MT6893）
 
-同 SoC 的第二台机器（chopin 是 Redmi Note 10 Pro）。移植刚开始，**内核还起不来**。
+同 SoC 的第二台机器（chopin 是 Redmi Note 10 Pro）。移植刚开始。
+
+> **2026-11-15**：失败点已定位到 **LK**（不是内核）：LK 在交出控制权前
+> `panic: ASSERT boot_info.c:616 g_boot_info.hdr_loaded`，详见
+> [`linux/STATUS-2026-11-15.md`](linux/STATUS-2026-11-15.md)。
 
 | 路线 | 目录 | 状态 |
 | --- | --- | --- |
-| Linux | [`linux/`](linux/README.md) | ❌ 内核在 ares 上极早期失败（重启） |
+| Linux | [`linux/`](linux/README.md) | ⏳ 内核还没被执行：LK 在加载 boot image 后 panic（见 STATUS-2026-11-15） |
 
 ## 与 chopin 的差异（已确认）
 
