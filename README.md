@@ -1,119 +1,33 @@
-# chopin 文档
+# docs
 
-Redmi Note 10 Pro（MT6891 / "chopin"）把 Android 厂商内核换成主线 Linux 的
-完整记录：踩过的坑、验证过的结论、以及为什么某些路走不通。
+各机型把 Android 厂商内核换成主线 Linux 的记录：踩过的坑、验证过的结论、
+以及为什么某些路走不通。
 
-* 内核源码：`git/chopin-linux-7.3`
-* 固件/服务/配置：`git/chopin-support`
-* **启动 initramfs（PID 1）**：`git/chopin-initramfs`
-  * 分支 `rootfs` —— 设备实际启动的极简 PID 1（557 行）
-  * 分支 `recovery` —— 救援镜像：Alpine + 硬件诊断 + USB shell（4416 行）
-* 文档：本仓库
+**按机型分目录**，每个机型目录下再按**功能**分文件、并有一条**时间线**。
 
----
-
-| [power/CHARGING-STATUS.md](power/CHARGING-STATUS.md) | 电池与充电的移植状态：能用的部分、三个缺口、彻底清理的步骤 |
-> **新会话从这里开始**：[`HANDOFF-2026-11-08.md`](HANDOFF-2026-11-08.md)
-> 当前状态、这期间的变化、未完成的工作、重要约定
-
-## 从哪开始
-
-| 想知道什么 | 读这个 |
-| --- | --- |
-| **整个移植是怎么一步步走到今天的** | [`history/README.md`](history/README.md)（按时间顺序的 9 个阶段） |
-| **现在能干什么、不能干什么** | [`status/STATUS.md`](status/STATUS.md) |
-| 电量计为什么读不到、PD 为什么不协商 | [`power/CHARGING.md`](power/CHARGING.md) |
-| GPU 怎么从 350 提到 810 MHz | [`gpu/GPU-PERF.md`](gpu/GPU-PERF.md) |
-| 挂起为什么放弃（10+ 轮完整记录） | [`power/SUSPEND-ANALYSIS.md`](power/SUSPEND-ANALYSIS.md) |
-| 显示时钟链路 | [`display/DRM-CLOCK-GAP.md`](display/DRM-CLOCK-GAP.md) |
-| 厂商 DRM 有什么坑 | [`display/V2-DRM-AUDIT.md`](display/V2-DRM-AUDIT.md) |
-| rootfs 怎么构建、GNOME 怎么配 | [`rootfs/DEBIAN-ROOTFS.md`](rootfs/DEBIAN-ROOTFS.md) |
-| **开机那一刻到底发生了什么** | [`rootfs/BOOT-CHAIN.md`](rootfs/BOOT-CHAIN.md)（从上电到 denial 的完整链路） |
-| Droidloom（安卓应用）为什么跑不起来 | [`desktop/DROIDLOOM.md`](desktop/DROIDLOOM.md) |
-
-## 目录
-
-### `status/`
-当前状态快照：功能矩阵、性能实测、已知限制、镜像清单。
-
-### `media/`
-| 文档 | 内容 |
-| --- | --- |
-| `VDEC-PORT.md` | 硬件视频解码（VDEC）移植：MT6893 与 MT8192 的 IP 布局一致、基础设施已就绪、rv SCP 驱动冲突导致重启、下一步计划 |
-
-### `power/`
-| 文档 | 内容 |
-| --- | --- |
-| `CHARGING.md` | 电量计（BQ27Z561）+ PD 快充。含**两个上游 bug**的定位过程 |
-| `SUSPEND-ANALYSIS.md` | 挂起的三道坎，以及为什么放弃 |
-| `SUSPEND-NOTES.md` | 更早的挂起笔记 |
-
-### `desktop/`
-| 文档 | 内容 |
-| --- | --- |
-| `DROIDLOOM.md` | Droidloom 的完整尝试：Mali 支持补丁、内核缺项（binderfs/nftables/veth/DMA-BUF 堆/EROFS/syncobj）、以及卡住的 EGL/ANGLE 与 PanVK v9 |
-
-### `display/`
-| 文档 | 内容 |
-| --- | --- |
-| `MAINLINE-DRM.md` | 从厂商 mediatek_v2 DRM 迁到主线 mtk-drm 的评估：驱动已支持 MT6893，缺 DTS 和面板驱动 |
-| `DRM-CLOCK-GAP.md` | 显示时钟链路 |
-| `V2-DRM-AUDIT.md` | 厂商 DRM 的坑 |
-
-### `gpu/`
-| 文档 | 内容 |
-| --- | --- |
-| `GPU-PERF.md` | 三个性能缺口的全部实验：PLL 安全重锁（+77%）、电压、带宽 |
-| `GPU-PORT.md` / `GPU-HANDOFF.md` | 早期移植笔记与移交 |
-
-### `display/`
-| 文档 | 内容 |
-| --- | --- |
-| `DRM-CLOCK-GAP.md` | 显示时钟链路调查（最长的一篇） |
-| `V2-DRM-AUDIT.md` | 厂商 `mediatek_v2` DRM 的漏洞审计 |
-| `DSC-REFERENCE.md` | DSC 参考资料（迁移主线的硬阻塞） |
-| `NEXT-DRM.md` | 早期 DRM 计划 |
-| `UEFI-PORT.md` | U-Boot/UEFI 尝试记录（最终走 preloader→LK 路线） |
-| `PMIC-IRQ-NOTES.md` | PMIC 中断笔记 |
-
-### `sensors/`
-SCP RV33 传感器链、加速度计、自动旋转。`REVIEW-ACCEL-*.md` 是逐轮审查记录。
-
-### `usb/`
-| 文档 | 内容 |
-| --- | --- |
-| `OTG.md` | USB 主机/OTG 调查：供电链路已通，端口使能失败（未完成） |
-
-### `connectivity/` `audio/` `rootfs/` `build/`
-WiFi/BT、音频、Debian rootfs 与 GNOME、7.3 内核迁移。
-
-### `archive/`
-过期的手递文档、计划、总结。保留是因为里面有历史决策的推理过程。
+| 机型 | 平台 | 目录 |
+| --- | --- | --- |
+| Redmi Note 10 Pro（chopin） | MT6891Z / MT6893 | [`chopin/`](chopin/README.md) |
 
 ---
 
-## 几条被反复验证的硬结论
+## 每个机型目录里有什么
 
-1. **没有 U-Boot/UEFI**：`preloader → LK → GenieZone → Linux`。
-   boot 镜像必须带厂商 DTB，自有 DTB 在 `setup_arch()` 里替换。
+| 文件 | 内容 |
+| --- | --- |
+| `README.md` | 机型总览：硬件、当前状态矩阵、从哪开始读 |
+| `TIMELINE.md` | **按时间**的移植过程：每个阶段做了什么、为什么、结果 |
+| `NN-功能.md` | **按功能**的现状与结论（启动、显示、GPU、电源、音频、无线、传感器、桌面、rootfs、媒体、指纹、USB、构建、WoA） |
+| `archive/` | 全部原始文档（按主题写的长文、交接记录、历史评估），供查细节 |
 
-2. **显示只能用厂商 `mediatek_v2`**：主线 `mediatek/` 缺 DSC 支持，
-   而这块屏是 DSC 视频模式。迁移主线 = 先补几百行 DSC。
+> 以前的布局是"一个目录一个功能"，文档散在十几个目录里；现在改成
+> 机型 → 功能文件 + 时间线，`archive/` 只做存档，不再增长。
 
-3. **挂起不可行**：`mtu3` + CMDQ wakelock 双重阻塞，且修复手段会截断
-   CMDQ 事务导致卡死。熄屏已能省 0.5–1.5 W，足够。
+## 相关仓库
 
-4. **I2C 读全 0xFF 先查总线**：i2c0 在 400 kHz 下所有设备读不出数据，
-   降到 100 kHz 一切正常。**对照实验比猜设备状态有效得多。**
-
-5. **测量协议本身就是数据**：改频率后的首轮系统性偏慢；连续扫频会被热节流
-   污染。结论错误往往来自测量方法，而不是硬件。
-
----
-
-## 写文档的约定
-
-* 结论要带**实测数据**，不要写"应该可以"
-* 失败要写**为什么失败**，以及做了什么对照实验
-* 推测要显式标注为推测
-* 数据不可靠时**主动标注**（例如"这组用了有缺陷的扫频协议"）
+| 仓库 | 内容 |
+| --- | --- |
+| `git/chopin-linux-7.3` | 内核与设备树 |
+| `git/chopin-support` | 固件、服务、配置 |
+| `git/chopin-initramfs` | 启动 initramfs（`rootfs` 分支：极简 PID 1；`recovery` 分支：救援镜像） |
+| `git/docs` | 本仓库 |
