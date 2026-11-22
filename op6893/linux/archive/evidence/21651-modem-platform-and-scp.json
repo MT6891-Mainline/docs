@@ -1,0 +1,133 @@
+{
+ "feature": "op6893 21651: modem resource owners, cold power cycle and SCP READY1 on the new unit",
+ "date": "2026-11-22",
+ "images": [
+  {
+   "identity": "2deaae15433e",
+   "profile": "systemd, userdata, radio, graphics, modem=inspect",
+   "purpose": "read-only LK handoff inspection"
+  },
+  {
+   "identity": "4494a6a71dfc",
+   "profile": "systemd, userdata, radio, graphics, modem=platform",
+   "purpose": "cold platform owner; first probe failed -EBUSY with both handoff owners enabled"
+  },
+  {
+   "identity": "98d9285d7fa9",
+   "profile": "systemd, userdata, radio, graphics, modem=platform",
+   "purpose": "cold power cycle verified after disabling the metadata-only node"
+  },
+  {
+   "identity": "1d98f81c9e70",
+   "profile": "systemd, userdata, radio, graphics, modem=full",
+   "purpose": "SCP runtime, MD prepare/release, FS/RPC services"
+  },
+  {
+   "identity": "c81922ef47a0",
+   "profile": "systemd, userdata, radio, modem=full",
+   "purpose": "kernel RPC 0x4009 answered with the audited MD-view numbers; MD passes mml1_rf but asserts on the 0x0f fill"
+  },
+  {
+   "identity": "bf791ade3885",
+   "profile": "systemd, userdata, radio, modem=full",
+   "purpose": "band-support straps sampled at probe from band-strap-gpios/band-strap-ids"
+  }
+ ],
+ "lk_handoff": {
+  "result": "valid on 21651",
+  "record": "version=3 tags=20 bytes=2664 ccb=1; modem not started",
+  "smem": "users=23 nc_bytes=25165824 cache_bytes=43384832 cache_gaps=524288",
+  "regions": "bank0=0xe0000000+0x1e000000 noncached=0x8e000000+0x1800000 cached=0x8a000000+0x2960000 cache_md_base=0x48000000",
+  "note": "21651 runs 20615's LK, so the mblock addresses match; the cached bank is 0x8a000000+0x2960000 here rather than the 0x88000000+0x4960000 the board file declares, and the driver uses LK's value"
+ },
+ "exclusive_owner": {
+  "problem": "with both modem-handoff and modem-platform enabled the platform probe failed: LK metadata inspection failed: stage=snapshot error=-16",
+  "cause": "only one owner may snapshot the LK tag buffer; the second memremap-backed read is refused",
+  "fix": "the 21651 modem tree disables /modem-handoff"
+ },
+ "cold_power_cycle": {
+  "sequence": [
+   "lk-on / lk-on-held (inherited from LK)",
+   "takeover -> cold / cold-after-lk",
+   "on -> powered / powered-cpu-not-released, clocks=1 domain=1",
+   "off -> stopped, clocks=0 domain=0 error=0"
+  ],
+  "rails_uv": "800000,800000,800000,700000 unchanged across the cycle",
+  "cpu_release_issued": 0,
+  "note": "the platform owner never changes voltages and never releases the MD CPU"
+ },
+ "scp": {
+  "pin": "pin_verified=1, scp_resources=0x02 (26 MHz), scp_user=1",
+  "runtime": "active=1 ready=1 generation=1 events=2 ready_channel=22 awake_pairs=1 error=0 cleanup_error=0",
+  "boot_state": "running=1 ready_now=1",
+  "observation": "selector=0 gated=0 firmware_base=0x9fa00000 firmware_size=0x500000 share_base=0x8d000000 share_size=0x320000",
+  "stop": "active=0 generation=0, awake_fault=1 recorded because the paired awake put raced the deliberate SCP stop"
+ },
+ "md_boot_attempts": {
+  "first_attempt": {
+   "nvram_source": "20615 private working copy",
+   "result": "MD asserted: ex_type=80 (ASSERT_FAIL_EXCEPTION) line=3414 path=mcu/service/nvram/src/nvram_main.c para=0x0,0x20,0x0",
+   "conclusion": "the migration notes say not to reuse 20615 private data; the 21651 NVRAM is a different snapshot"
+  },
+  "second_attempt": {
+   "nvram_source": "21651's own partitions, read-only from mainline: Z<-nvdata/md X<-protect1/md Y<-protect2/md S<-nvcfg, 452 files",
+   "result": "the nvram_main assert is gone; the MD consumed 727 FS replies and then asserted in mcu/driver/ccismcore/src/ccismcore_ccci.c line=2031 para=0x4,0x9eeca80,0x0",
+   "handshake": "state=6 error=-32 bytes=832 rejected=64 hs2_seen=0",
+   "last_fs_ops": [
+    "0x1012 Z:\\.NVRAM\\BACKUP\\FILE* 0 16 18 status=-6",
+    "0x100c Z:\\.NVRAM\\CALIBRAT\\FILELIST -> Z:\\.NVRAM\\BACKUP\\FILELIST_<suffix> 1 status=-16"
+   ],
+   "backend": "stopped with UnsupportedOperation while decoding a reply schema",
+   "conclusion": "the vendor's NVRAM backup rotation (find + Move of the FILELIST files) is not modelled; the MD asserts in CCISM after the FS error"
+  }
+ },
+ "md1img": {
+  "partition": "/dev/sdc28",
+  "file_info_name": "k6893v1_64_k419_20615S_MDBIN_PCB01_MT6893_S00.MOLY_NR15_R3_TC16_S_PR2_SP_V2_P88.bin",
+  "build_time": "2024/01/08 18:33",
+  "note": "the version string matches 20615 but the partition SHA-256 differs between the units, so it is a different build of the same release"
+ },
+ "kernel_changes": {
+  "commit": "72b5e4d92",
+  "items": [
+   "ARM64_OP6893_21651_MODEM selects mt6893-op6893-21651-modem.dts",
+   "the modem tree enables the PMIC supplies, MD1 domain, modem-platform, SCP owner/observe and DPMAIF, and disables modem-handoff",
+   "the smem_clear policy attribute now follows CONFIG_OP6893_CCCI_MD_BOOT, which fixes the link failure when the platform owner is built without the boot owner"
+  ]
+ },
+ "pre_existing_test_failure": {
+  "test": "test_modem_scp_owner_observe.py",
+  "assertion": "forbidden token check on ccci-scp-inspect.c",
+  "note": "the committed driver calls memcpy_fromio/memcpy_toio/memset_io in the TCM restore path, so the test's 'no I/O' expectation is stale; unrelated to this change"
+ },
+ "fs_semantics": {
+  "conclusion": "wide path arguments are NUL-terminated C strings; the MD reuses its buffers",
+  "observed": "Move destination carried the previous FindFirst pattern 'Z:\\NVRAM\\BACKUP\\FILE*' after the terminator, which the vendor ignores and the backend rejected with -16",
+  "delete": "0x100f is FS_CCCI_Delete: one wide path, unlink of one regular file, mapped errno on failure; a directory returns the generic -18 as the vendor's unlink does",
+  "unsupported_rpc": "an unimplemented user RPC now answers the vendor's single s32 NO_OP=-1 instead of failing the whole submit",
+  "commit": "8cca63f02"
+ },
+ "gpio_adc_0x4009": {
+  "owner": "kernel; ccci_rpc_owner() classifies every id except 0x400f/0x4010 as CCCI_RPC_KERNEL, so a userspace handler is never reached",
+  "request": "425-byte v2 record, reqMask=3, gpioValidPinMask=0x000f, names starting GPIO_FDD_Band_Support_Detection_*",
+  "straps": "band-strap-gpios = <&pio 63..66>, band-strap-ids = <63 64 65 66>, sampled once at probe",
+  "measured_levels": "63=1 64=0 65=1 66=0, read on this unit with the GPIO v2 character device (GPIO_V2_GET_LINE_IOCTL + GET_VALUES), not inferred",
+  "corroboration": "/data/src/frog/1.log (project 21609) shows the same 1,0,1,0 pattern; used only as a cross-check",
+  "before": "status 0 with the vendor's 0x0f fill everywhere, MD asserted in mcu/l1/mml1/mml1_rf/src/mmrf/gen97/mml1_rf_error_check.c:211 para=0x1,0xf0f0f0f",
+  "after": "MD no longer asserts there"
+ },
+ "hs2_blocker": {
+  "state": "HS1 accepted, runtime published, WAIT_HS2; the MD spends 40-50 s and about 6000 FS requests in its early NVRAM pass, then asserts",
+  "handshake": "state=6 error=-110 active=0 hs2_seen=0",
+  "services": "tx=5983 tx_error=0",
+  "ccism": "state=1 (ARMED) md_open=1 scp_open=1; the vendor sends CCISM_SHM_INIT only after MD READY, so ARMED is a consequence",
+  "md_ee": "version=0xab000005 cores=12 offender=MCU ex_type=80 class=assert line=2031 path=mcu/driver/ccismcore/src/ccismcore_ccci.c para=0x4,0x9eeca80,0x0 lr=0x90103244",
+  "excluded": [
+   "runtime feature set: the tree already grants the 28 features that unblocked 20615",
+   "feature 15: runtime_mask=0x8000 leaves both the negotiated table and the assert unchanged",
+   "userspace latency: respond() measures 0.13-0.20 ms per request on the device; tracing on/off changes the request count by 2%",
+   "FS semantics: the rotation, Restore, CMPT and attribute paths all progress until the MD itself asserts"
+  ],
+  "needed": "MD-side observability (DFD log or the ccismcore param meaning); further AP-side guesses have no evidence behind them"
+ }
+}
