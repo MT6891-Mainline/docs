@@ -9,6 +9,7 @@
 | --- | --- | --- |
 | Redmi Note 10 Pro（chopin） | MT6891Z / MT6893 | [`chopin/`](chopin/README.md) |
 | Redmi K40 Gaming（ares） | MT6893 | [`ares/`](ares/README.md) |
+| realme GT Neo（op6893） | MT6893 | [`op6893/`](op6893/README.md) |
 
 ---
 
